@@ -12,6 +12,7 @@ import {
   stepMotion,
   captureMotion,
 } from "../../shared/motion.js";
+import { collectPeerMoves } from "./peer-move-stream.js";
 import { createSimulation } from "../../client/src/physics/simulation.js";
 import { nearestSavedArrival } from "../../client/src/world/field-arrival.js";
 import { npcRectangle } from "../../client/src/world/life-geometry-numeric.js";
@@ -31,7 +32,6 @@ import {
   actorEntity,
   lifeEntity,
   dropEntity,
-  peerMotionEntity,
   snapshotParts,
 } from "./field-views.js";
 import {
@@ -166,11 +166,6 @@ function resumableResume(actor, motion) {
     Number.isFinite(motion.vx) &&
     Number.isFinite(motion.vy)
   );
-}
-
-/** Change key for the un-gated peer stream: publish only when a sampled field changes. */
-function peerMotionSignature(entity) {
-  return JSON.stringify(entity);
 }
 
 function inspectReportedMotion(world, actor, sample) {
@@ -820,30 +815,19 @@ export class OnlineWorld {
     });
   }
 
-  /** The native move packet: every tick, each active actor's sampled motion for the other
+  /** Adapt native path replay to every tick's server-simulated motion for the other
    *  actors in its field. It is not part of the ordered/acked publication sequence, so a
    *  slow round trip cannot throttle how often peers move on screen -- the ack-gated
    *  `state` frame remains for membership, appearance and removal only. */
   publishPeerMotions(field) {
     const actors = this.activeActors(field);
     if (actors.length < 2) return;
-    const changed = [];
-    // A crowded field publishes at most MAX_PEER_MOTIONS samples per tick. Rotation keeps
-    // that bound fair: an actor skipped this tick is first in line on the next one.
-    const start = field.tick % actors.length;
-    for (let offset = 0; offset < actors.length; offset++) {
-      if (changed.length >= PROTOCOL.MAX_PEER_MOTIONS) break;
-      const actor = actors[(start + offset) % actors.length];
-      const entity = peerMotionEntity(actor);
-      const signature = peerMotionSignature(entity);
-      if (actor.peerMotionSignature === signature) continue;
-      changed.push({ actor, entity, signature });
-    }
+    const changed = collectPeerMoves(actors, field);
     if (!changed.length) return;
     for (const actor of actors) {
       const entries = [];
       for (const entry of changed) {
-        if (entry.actor !== actor) entries.push(entry.entity);
+        if (entry.id !== actor.id) entries.push(entry);
       }
       if (!entries.length) continue;
       this.publish(actor, {
@@ -852,10 +836,6 @@ export class OnlineWorld {
         tick: field.tick,
         entries,
       });
-    }
-    // Only a sample that actually crossed the wire may retire its change key.
-    for (const entry of changed) {
-      entry.actor.peerMotionSignature = entry.signature;
     }
   }
 

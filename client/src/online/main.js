@@ -249,7 +249,7 @@ function retainsMotion(snapshot) {
 async function refreshScene(snapshot, retainMotion, signal) {
   await current.queue;
   signal?.throwIfAborted();
-  await current.replace(snapshot);
+  await current.replace(snapshot, retainMotion);
   signal?.throwIfAborted();
   if (!retainMotion) installPrediction(current, snapshot);
   await publishNative(snapshot);
@@ -413,22 +413,25 @@ function entryPortal(portals, position) {
   return null;
 }
 
-/** Only the authenticated predictor's fixed scheduler advances movement, never RAF. */
-function advance() {
+/** Every caller uses the same bounded fixed-step clock, independent of frame cadence. */
+function advance(now = performance.now()) {
   if (destroyed || transport.status !== "active" || document.hidden) return;
   try {
     if (input.state.upPressed && !isBlocked()) portal();
-    const steps = prediction.advance(
-      performance.now(),
-      isBlocked() ? neutral : input.state,
-    );
+    const steps = prediction.advance(now, isBlocked() ? neutral : input.state);
     if (steps) input.afterTick();
   } catch (error) {
     failedScene(error);
   }
 }
-function draw(now) {
+function draw() {
   if (destroyed) return;
+  // RAF's timestamp predates its callbacks. Network processing can delay this
+  // callback until the fixed timer has already advanced past that timestamp.
+  const now = performance.now();
+  // A frame can precede the 4 ms timer at a quantum boundary. Finish due fixed
+  // steps before sampling, rather than drawing one stale, clamped interpolation.
+  advance(now);
   const elapsed = previousTime ? Math.min(now - previousTime, 100) : 0;
   previousTime = now;
   try {

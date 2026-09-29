@@ -81,9 +81,8 @@ function playerMotion(sim) {
   };
 }
 
-/** The per-tick move-path sample another actor needs to replay this one's motion.
- *  The native client published the same fields on its move packet: position, velocity,
- *  foothold contact, action and the effective movement coefficients. */
+/** Authority sample for peer path replay. Position, velocity, contact and action match
+ * the recovered path inputs; movement coefficients/contact planes are OpenMS metadata. */
 export function peerMotionEntity(actor) {
   const sim = actor.simulation;
   return {

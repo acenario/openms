@@ -1,6 +1,6 @@
 // Deterministic peer-latency trace: does the drawn remote actor follow the true trajectory
 // when samples traverse a slow link? Runs the real shared physics kernel for the peer and the
-// real client RemoteMotion replay, with no browser, account or database.
+// real client RemotePlayerPath replay, with no browser, account or database.
 //
 // Usage:
 //   bun client/tools/peer-latency-trace.js [--interval 1] [--gated] [--one-way-ms 250]
@@ -14,23 +14,38 @@ import {
 } from "../src/physics/simulation.js";
 import { attachGround, prepareSegments } from "../src/physics/geometry.js";
 import { prepareBounds } from "../src/physics/bounds.js";
-import { RemoteMotion } from "../src/online/remote-motion.js";
+import { parseFlags } from "./source-options.js";
 import { RemotePlayerPath } from "../src/online/remote-player-path.js";
 
 const TICK_MS = 30;
 const FRAME_MS = 15;
 const TICKS = 220;
 
-function option(name, fallback) {
-  const index = process.argv.indexOf(`--${name}`);
-  if (index < 0) return fallback;
-  const value = process.argv[index + 1];
-  return value === undefined || value.startsWith("--") ? fallback : value;
+const flags = parseFlags(process.argv.slice(2), {
+  interval: { type: "string" },
+  gated: { type: "boolean" },
+  "one-way-ms": { type: "string" },
+  help: { type: "boolean" },
+});
+if (flags.help) {
+  console.log(
+    "bun client/tools/peer-latency-trace.js [--interval 1] [--gated] [--one-way-ms 250]",
+  );
+  process.exit(0);
 }
-
-const INTERVAL = Math.max(1, Number(option("interval", 1)) || 1);
-const GATED = process.argv.includes("--gated");
-const ONE_WAY_MS = Math.max(0, Number(option("one-way-ms", 250)) || 0);
+const INTERVAL = Number(flags.interval ?? 1);
+const GATED = Boolean(flags.gated);
+const ONE_WAY_MS = Number(flags["one-way-ms"] ?? 250);
+if (
+  !Number.isInteger(INTERVAL) ||
+  INTERVAL < 1 ||
+  INTERVAL > 128 ||
+  !Number.isInteger(ONE_WAY_MS) ||
+  ONE_WAY_MS < 0 ||
+  ONE_WAY_MS > 2000
+) {
+  throw new Error("interval must be 1..128 ticks and one-way-ms 0..2000");
+}
 
 const mapFile = (
   await Array.fromAsync(
@@ -157,12 +172,7 @@ function floorYAt(segments, x) {
 }
 
 function replay(trace, samples, segments) {
-  const motion = new RemoteMotion(
-    samples[0].entity,
-    -1,
-    0,
-    new RemotePlayerPath(segments),
-  );
+  const motion = new RemotePlayerPath(samples[0].entity, 0, 0);
   motion.x = samples[0].entity.position.x;
   motion.y = samples[0].entity.position.y;
   let index = 0;
@@ -172,19 +182,19 @@ function replay(trace, samples, segments) {
   for (let now = 0; now <= TICKS * TICK_MS; now += FRAME_MS) {
     while (index < samples.length && samples[index].at + ONE_WAY_MS <= now) {
       const sample = samples[index];
-      motion.observe(
-        sample.entity,
-        sample.tick,
+      motion.append(
+        {
+          ...sample.entity,
+          tick: sample.tick,
+          moveType: 0,
+          durationMs: (sample.tick - (samples[index - 1]?.tick ?? 0)) * TICK_MS,
+        },
         sample.at + ONE_WAY_MS,
-        sample.entity.foothold === null
-          ? null
-          : segments.byId.get(sample.entity.foothold),
       );
       index++;
     }
-    motion.advance(FRAME_MS);
     const pose = motion.sample(now);
-    const contentMs = now - motion.playoutMs - ONE_WAY_MS;
+    const contentMs = now - 60 - ONE_WAY_MS;
     if (contentMs <= 0) continue;
     const tick = Math.max(
       0,
@@ -205,7 +215,7 @@ function replay(trace, samples, segments) {
       }
     }
   }
-  return { penetration, error, worst, playoutMs: motion.playoutMs };
+  return { penetration, error, worst, replay: motion.snapshot() };
 }
 
 const { trace, samples } = buildTrace();
@@ -217,7 +227,7 @@ console.log(
       gated: GATED,
       oneWayMs: ONE_WAY_MS,
       samples: samples.length,
-      playoutMs: result.playoutMs,
+      replay: result.replay,
       maxPenetrationPx: Number(result.penetration.toFixed(3)),
       maxReconstructionErrorPx: Number(result.error.toFixed(3)),
       worst: result.worst,

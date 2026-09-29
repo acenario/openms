@@ -1,5 +1,4 @@
-/** The native move path is refilled every tick; 32 samples hold ~960 ms, comfortably more
- *  than one network leg plus the playout delay, so the render time stays inside the buffer. */
+/** Bounded snapshot storage for OpenMS mob presentation. */
 const SAMPLE_CAPACITY = 32;
 /** Playout adapts between these bounds. A dense per-tick stream converges to ~60 ms, enough
  *  to absorb jitter without rendering an extrapolated frame. */
@@ -52,22 +51,11 @@ function sampleEntry() {
   };
 }
 
-/** Display-only reconstruction of a peer's motion from received move samples.
- *
- *  The peer's own simulation is published every tick on the un-acked `peers` stream, exactly
- *  as the native move path (`0xb6`) carried a list of 30 ms samples. Those samples are
- *  buffered and the actor is drawn slightly in the past, interpolating with a cubic Hermite
- *  that uses both the position and the velocity of the two bracketing samples. That is the
- *  native `CMovePath` replay: a continuous clock refilled by packets, never restarted by
- *  them, landing on the sender's own foothold contact instead of a reconstruction. When the
- *  buffer is momentarily shallow the newest sample is forecast for at most one interval, then
- *  coasts smoothly to rest. The drawn pose chases the buffered target along the error vector
- *  at a rate above any original movement speed, so reconciliation bends the path instead of
- *  snapping it and never lags a real jump; only a relocation or an impossible discontinuity
- *  is presented outright. */
+/** OpenMS mob presentation policy: buffer snapshots, forecast briefly and ease error.
+ * This is not the recovered native move-path replay. Remote characters use
+ * RemotePlayerPath with explicit durations and no forecast (native-lag-handling.md). */
 export class RemoteMotion {
-  constructor(entity, tick, now, trajectory = null) {
-    this.trajectory = trajectory;
+  constructor(entity, tick, now) {
     this.x = entity.position.x;
     this.y = entity.position.y;
     this.tick = -Infinity;
@@ -94,7 +82,6 @@ export class RemoteMotion {
     this.entity = entity;
     this.tick = tick;
     this.foothold = foothold;
-    this.trajectory?.observe(entity);
     if (reset) {
       this.clearSamples();
       this.x = entity.position.x;
@@ -117,8 +104,6 @@ export class RemoteMotion {
     this.y = y;
     this.clearSamples();
     this.lastSampleAt = now;
-    if (this.trajectory) this.trajectory.enabled = false;
-    if (this.pendingTrajectory) this.pendingTrajectory.enabled = false;
   }
 
   /** Draw the actor at `now - playoutMs`, then chase the buffered target at a bounded rate. */
@@ -245,8 +230,7 @@ export class RemoteMotion {
   }
 
   /** A cubic Hermite between an airborne sample and the sample where the peer lands
-   *  overshoots a couple of pixels through the platform. The native replay applies the
-   *  landed sample's foothold contact; this never draws the peer below the surface it is
+   *  overshoots a couple of pixels through the platform. This OpenMS contact clamp never draws the peer below the surface it is
    *  arriving on, and never pulls back a peer that is leaving a contact. */
   clampContact(before, after) {
     const floor = after.foothold;
@@ -292,12 +276,6 @@ export class RemoteMotion {
 
   forecast(sample, travelMs) {
     const seconds = travelMs / 1000;
-    if (this.trajectory?.enabled) {
-      const point = this.trajectory.sample(seconds);
-      this.scratch.x = point.x;
-      this.scratch.y = point.y;
-      return;
-    }
     const moving = this.entity?.mobState?.hp !== 0;
     let x = sample.x + (moving ? sample.vx * seconds : 0);
     let y = sample.y + (moving ? sample.vy * seconds : 0);

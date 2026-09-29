@@ -28,8 +28,6 @@ import { weaponActionAnimationMs } from "../combat/weapon-usage.js";
 import { DropPresentationMotion } from "./drop-presentation-motion.js";
 import { RemoteAnimationClock } from "./remote-animation-clock.js";
 import { RemotePlayerPath } from "./remote-player-path.js";
-import { prepareSegments } from "../physics/geometry.js";
-import { prepareBounds } from "../physics/bounds.js";
 import { RemoteMotion } from "./remote-motion.js";
 const MAX_ENTITIES = 4096;
 const MOVEMENT_ACTIONS = new Set([
@@ -79,8 +77,7 @@ export class OnlineScene {
     this.selfId = null;
     this.tick = 0;
     this.motionNow = performance.now();
-    this.peerClockOffset = null;
-    this.remoteGeometry = null;
+    this.presentationAt = this.motionNow;
     this.paused = false;
     this.follow = true;
     this.geometry = new Graphics();
@@ -120,13 +117,13 @@ export class OnlineScene {
     await this.events.prepare(this.controller.signal);
     return this;
   }
-  async replace(snapshot) {
+  async replace(snapshot, retainMotion = false) {
     this.tick = snapshot.serverTick;
-    this.peerClockOffset = null;
     const ids = new Set([snapshot.self.entity.id]);
     await this.upsert(snapshot.self.entity);
     for (const entity of snapshot.entities) {
       ids.add(entity.id);
+      if (!retainMotion) this.resetPeerPath(entity);
       if (entity.id !== this.selfId) await this.upsert(entity);
     }
     for (const id of this.views.keys()) if (!ids.has(id)) this.remove(id);
@@ -134,6 +131,15 @@ export class OnlineScene {
     for (const entity of this.reactorEntities.values()) {
       if (!ids.has(entity.id)) this.remove(entity.id);
     }
+  }
+  resetPeerPath(entity) {
+    const view = this.views.get(entity.id);
+    if (!(view?.motion instanceof RemotePlayerPath)) return;
+    view.motion.reset(entity, this.tick, this.motionNow);
+    delete view.motionTick;
+    view.presentedMotion = view.motion.drawn;
+    view.fromX = view.drawX = entity.position.x;
+    view.fromY = view.drawY = entity.position.y;
   }
   changes(message) {
     const work = this.queue.then(async () => {
@@ -150,21 +156,16 @@ export class OnlineScene {
     });
     return work;
   }
-  /** The native move packet: another actor's sampled motion, one entry per changed tick.
-   *  Display-only and un-acked. It never admits state or spawns/removes an entity, and an
-   *  unknown id is ignored until its ordered view arrives. Samples are placed on the server
-   *  tick timeline (offset once onto the presentation clock) so a burst or an idle gap keeps
-   *  its true 30 ms spacing instead of collapsing into the arrival time. */
+  /** Receipt appends duration-bearing samples; the actor's replay clock advances only
+   * on draw. A delayed state frame cannot overwrite this independent movement stream. */
   peers(message) {
     if (message.fieldEpoch !== this.fieldEpoch) return;
-    this.peerClockOffset ??= this.motionNow - message.tick * PROTOCOL.TICK_MS;
-    const now = message.tick * PROTOCOL.TICK_MS + this.peerClockOffset;
     for (const entry of message.entries) {
       const view = this.views.get(entry.id);
       if (!view || view.entity.kind !== "player" || entry.id === this.selfId) {
         continue;
       }
-      const previousY = view.entity.position.y;
+      if (!view.motion.append(entry, this.motionNow)) continue;
       view.entity = {
         ...view.entity,
         position: entry.position,
@@ -177,27 +178,7 @@ export class OnlineScene {
       };
       view.received = this.motionNow;
       view.observedAge = 0;
-      view.motionTick = message.tick;
-      // The first real move sample arms the shared-geometry forecast for this actor.
-      if (!view.motion.trajectory && view.motion.pendingTrajectory) {
-        const trajectory = view.motion.pendingTrajectory;
-        view.motion.pendingTrajectory = null;
-        trajectory.observe(view.entity);
-        view.motion.trajectory = trajectory;
-      }
-      view.actionClock.observe(view.entity);
-      view.motion.observe(
-        view.entity,
-        message.tick,
-        now,
-        this.footholds.get(entry.foothold),
-      );
-      view.holdClimb = holdObservedClimb(
-        animationName(entry.action),
-        previousY,
-        entry.position.y,
-      );
-      this.updateViewDepth(view);
+      view.motionTick = entry.tick;
     }
   }
 
@@ -250,36 +231,18 @@ export class OnlineScene {
     if (entity.kind === "drop") {
       return new DropPresentationMotion(entity, -1, this.motionNow);
     }
-    let path = null;
     if (entity.kind === "player" && entity.id !== this.selfId) {
-      if (!this.remoteGeometry) {
-        const physics = this.scene.manifest.physics;
-        this.remoteGeometry = prepareSegments(physics.footholds);
-        this.remoteGeometry.bounds = prepareBounds(
-          this.remoteGeometry.segments,
-          physics.map,
-        );
-      }
-      path = new RemotePlayerPath(this.remoteGeometry);
+      return new RemotePlayerPath(entity, -1, this.motionNow);
     }
-    // The ordered state frame is membership/appearance only. A still-loading actor is frozen
-    // by the server in its initial airborne spawn state and is excluded from the move stream,
-    // so arming the free-fall forecast from that frame would drop the peer once per round
-    // trip. Arm the path on the first un-acked move sample instead; until then the held
-    // sample has zero velocity and the peer stands frozen at its spawn.
-    const motion = new RemoteMotion(entity, -1, this.motionNow, null);
-    motion.pendingTrajectory = path;
-    return motion;
+    return new RemoteMotion(entity, -1, this.motionNow);
   }
+
   updateView(view, entity) {
     const previousY = view.entity.position.y;
     // The ordered state frame is acked and therefore round-trip bound; the un-gated peer
     // move stream is newer. Never regress a moving peer's sampled motion behind it, and do
     // not replay its older sample: the peer stream already owns this actor's clock.
-    const peerOwned =
-      entity.kind === "player" &&
-      view.motionTick !== undefined &&
-      this.tick <= view.motionTick;
+    const peerOwned = entity.kind === "player" && view.motionTick !== undefined;
     if (peerOwned) {
       entity = {
         ...entity,
@@ -326,14 +289,15 @@ export class OnlineScene {
     }
     if (!this.localCombat?.owns(entity)) {
       this.pose(view, view.drawX, view.drawY);
-      this.seekObservedAction(view);
+      if (!peerOwned) this.seekObservedAction(view);
     }
     this.observeAppearance(view);
     this.native?.life.refresh();
   }
   updateViewDepth(view) {
     const entity = view.entity;
-    const foothold = this.footholds.get(entity.foothold);
+    const presented = view.presentedMotion ?? entity;
+    const foothold = this.footholds.get(presented.foothold);
     if (entity.kind === "mob") {
       this.scene.setEntityDepth(
         view.animation,
@@ -348,7 +312,7 @@ export class OnlineScene {
     // 009b4929: a drawing contact is a foothold or a ladder's page, and while climbing no
     // foothold is reported at all. A peer therefore uses the plane the server published
     // instead of keeping the plane it left, which drew it behind the rope it was on.
-    const motion = entity.playerMotion;
+    const motion = presented.playerMotion;
     if (motion) {
       this.scene.setEntityDepth(
         view.animation,
@@ -645,7 +609,9 @@ export class OnlineScene {
     const { entity, animation } = view;
     animation.setPosition(x, y);
     animation.container.scale.x =
-      entity.kind !== "drop" && entity.facing > 0 ? -1 : 1;
+      entity.kind !== "drop" && (view.presentedMotion ?? entity).facing > 0
+        ? -1
+        : 1;
     if (view.name) view.name.step(this.app.renderer.resolution);
     if (view.mobName) view.mobName.scale.x = animation.container.scale.x;
     // A local hit reaction is presentation-only: the attacker sees the authored pose as soon
@@ -674,7 +640,7 @@ export class OnlineScene {
   poseAction(view) {
     const { entity, animation } = view;
     if (entity.kind === "drop") return "default";
-    const action = animationName(entity.action);
+    const action = animationName((view.presentedMotion ?? entity).action);
     let pose = action;
     if (action === "stand1") pose = animation.avatar?.standAction ?? action;
     if (action === "walk1") pose = animation.avatar?.walkAction ?? action;
@@ -757,6 +723,11 @@ export class OnlineScene {
   relocateObserved(event) {
     const view = this.views.get(event.actorId);
     if (!view) return;
+    // Peer paths carry explicit relocation samples. A late visual event must not
+    // flush that path or replay a teleport already consumed by the movement stream.
+    if (view.motion instanceof RemotePlayerPath && view.motion.streamOwned) {
+      return;
+    }
     view.fromX = view.drawX = event.destination.x;
     view.fromY = view.drawY = event.destination.y;
     view.received = this.motionNow;
@@ -807,6 +778,7 @@ export class OnlineScene {
       follow: this.follow,
       camera: { ...this.scene.camera },
       presentation: { ...this.presentation },
+      presentationAt: this.presentationAt,
       entityCount: this.views.size,
       npcs: this.npcs.size,
       chairs: this.chairs.seats.size,
@@ -830,6 +802,7 @@ export class OnlineScene {
           ? { ...view.entity.dropMotion }
           : null,
         projectedDrop: view.motion.lower?.state ?? null,
+        movePath: view.motion.snapshot?.() ?? null,
         observedX: view.entity.position.x,
         observedY: view.entity.position.y,
       })),
@@ -840,6 +813,7 @@ export class OnlineScene {
     return view ? this.events.target(view) : null;
   }
   draw(now, elapsed, prediction, active) {
+    this.presentationAt = now;
     this.paused = prediction?.paused ?? false;
     this.remoteActive = active && !this.paused;
     if (this.remoteActive) this.motionNow += elapsed;
@@ -912,11 +886,23 @@ export class OnlineScene {
         : view.motion;
       x = pose.x;
       y = pose.y;
+      this.presentRemotePath(view, pose, y);
       this.pose(view, x, y);
     }
     view.drawX = x;
     view.drawY = y;
     return simulation;
+  }
+  presentRemotePath(view, pose, y) {
+    if (!(view.motion instanceof RemotePlayerPath)) return;
+    view.presentedMotion = this.remoteActive ? pose : view.motion.drawn;
+    view.holdClimb = holdObservedClimb(
+      animationName(view.presentedMotion.action),
+      view.drawY,
+      y,
+    );
+    view.actionClock.observe(view.presentedMotion);
+    this.updateViewDepth(view);
   }
   /** Mob-only per-frame presentation: the locally resolved knockback and the locally
    *  resolved incoming swing. Both are display-only; the authority owns the durable state. */

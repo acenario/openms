@@ -624,3 +624,92 @@ The final native run passed both checks: **437 ms** to the mob's authored local 
 Extraction was reused. The separate nonpublishing browser build passed its authority-boundary guard (**969 modules**). JavaScript formatting/lint passed. The documentation checker still reports **881 existing missing targets**, with no heading failures; generated evidence was not added to repair historical links.
 
 Final native source build: `cbbd776c52b8d5c0236df0f655ad79fb09167298ce24c7a3f924056842c84bf8`; rules: `97170e96c871e40c535af16328573c3b707a100a0d4bed81ff58dbe473b0fcce`. Shared retained catalog: `bf4d12c856304ed77c55a1296dcd7bf82d11f2bea505e111c517ae1b1e482af4`; asset build: `11be20f84c507b5d85eba2fbdbd91f06c6b591922b11bad32ad0d02d3a16a939`. Baseline source build: `ea50fbc3018755b0fb608bbe4bcc7e7e1fabb80d99d372767de515191abe86aa`; rules: `79f202d4737a3764323a4be42fe85f4973a2e8a628cbe634359fb322263ad078`. No conversion was performed. Deploying the runtime/protocol change requires rebuilding/restarting client and server together.
+
+## Native movement clocks at high latency (2026-09-29)
+
+The [original-client trace](native-lag-handling.md) now connects local input, fixed-step
+physics, completed-path publication, remote-player dispatch/replay and the exact render
+interpolation getter. Ordinary local movement does not wait for a server reply. The
+original server is unavailable, so OpenMS retains its authoritative checkpoint/input
+replay and explicitly distinguishes that policy from recovered client behavior.
+
+The local baseline at **2,000 ms RTT** already moved forward without pauses, but its
+rendered walking speed pulsed: steady-speed RMS error was **13.22 px/s right / 11.61
+px/s left** against a 125 px/s walk. The scheduler reset interpolation to its actual
+wake-up time, losing fractional tick phase. A stale animation-frame timestamp could
+also precede a state already advanced by the movement timer. Both now use the scheduled
+quantum and a shared fresh draw-time sample. Reconciliation also preserves the visible
+pose when only the checkpoint's previous XY changes.
+
+Arrival jitter still modulated movement through the server tick-clock fit. An intermediate
+run measured 4.99 / 5.18 px/s RMS after the render-clock fix. Limiting tick-clock drift
+to 6 ms/s initially failed: slowly fitting a stale startup baseline expired input and
+produced 49.30 px/s RMS with three brief pauses. The clock now acquires its first nine
+samples promptly before limiting drift; a focused regression covers that startup case.
+The walking scenario now asserts RMS error below 3 px/s for uninterrupted steady walks,
+using the actual presentation interval. Baseline rows used the old renderer's RAF time.
+
+| Final 2,000 ms RTT check | Result |
+| --- | --- |
+| Steady right / left walking RMS speed error | 1.18 / 0.89 px/s |
+| Backward frames / pauses across all three walks | 0 / 0 |
+| Walking with an additional 1,500 ms delivery stall | No backward frames or pauses; 4.51 px/s RMS during recovery |
+| Jump/landing run, including an airborne delivery stall | 193 airborne frames; zero floating frames; zero ground gap |
+| Final local/server position error, both runs | 0 pixels |
+| Predictor readiness failures / history overflows | 0 / 0 |
+| Browser JavaScript errors | 0 |
+
+The peer implementation separately ports native duration queues, Hermite interpolation,
+30/32 ms replay, exhausted-path hold and explicit relocation. The owner trace establishes
+the player catch-up threshold as 550 ms, with excessive-backlog recovery at 5550 ms.
+The earlier two-account check at 500 ms RTT plus a 450 ms stall passed: 81 dry-path frames
+held position exactly, maximum queue 16, no recovery snaps, and observer reconnect settled
+onto the new baseline. Its 480 ms maximum queue remains below the corrected threshold.
+
+```sh
+bun test client/test/sync-alignment.test.js client/test/online-latency.test.js \
+  client/test/online-transport.test.js client/test/grounded-presentation.test.js \
+  client/test/divert-alignment.test.js client/test/online-skill-motion.test.js \
+  client/test/local-hit-motion.test.js client/test/native-move-path.test.js \
+  client/test/remote-move-stream.test.js server/test/network-latency.test.js \
+  server/test/remote-presentation.test.js server/test/motion-adoption.test.js \
+  server/test/hit-divert-replay.test.js
+bun server/tools/check-skill-motion.js --scope walk --round-trip-ms 2000 \
+  --output /tmp/openms-local-walk
+bun server/tools/check-skill-motion.js --scope landing --round-trip-ms 2000 \
+  --output /tmp/openms-local-landing
+bun server/tools/check-remote-motion.js --scope players --output /tmp/openms-peer-path
+```
+
+The final focused suite passed **130 tests / 2,520 assertions** in 3.17 seconds. Changed
+JavaScript passed formatting/lint, and a nonpublishing browser build passed the authority
+boundary guard. All browser runs reused the retained extraction and isolated their
+database, account and browser. No conversion, full smoke run or concurrency comparison
+was needed. Reports and raw logs remain outside the repository.
+
+| Measured stage | Final walk ms | Final landing ms |
+| --- | ---: | ---: |
+| Content/database setup | 284 | 290 |
+| Account seed | 91 | 96 |
+| Server startup | 1114 | 1188 |
+| Frontend startup/build | 1959 | 1870 |
+| Browser acquisition | 814 | 443 |
+| Identity read | 4413 | 4409 |
+| Login/readiness | 37760 | 37597 |
+| Latency warmup | 2504 | 2504 |
+| Movement exercise | 16825 | 19192 |
+| Browser / fixture teardown | 25 / 149 | 23 / 138 |
+
+Both final runs verified source build
+`d8d0f0ffd1f7a6ed4c18ca3a21e1728162cc240c331427b9b8cbe3884f1916e1` and rules
+`ee6c19e7805a268d870c1aca4c442539c3ac6ab969909552eb9e2f03868d3f99`.
+The baseline/peer run used source build
+`19c4fa8cd5ab412d143849e0e2424486e65b70b69d4470f5d27628f681f2239e` and rules
+`8d08d37cff32d1b2da699628aea3c4719f14a3299d29cc5b0f234f660e1e7f2e`.
+All used catalog `bf4d12c856304ed77c55a1296dcd7bf82d11f2bea505e111c517ae1b1e482af4`
+and asset build `11be20f84c507b5d85eba2fbdbd91f06c6b591922b11bad32ad0d02d3a16a939`.
+
+These are bounded simulated-latency checks, not an original Windows runtime comparison
+or a guarantee under arbitrary packet stalls. Beyond retained input history, the server
+can reject expired input and force a correction. The peer wire format changed; rebuild
+and restart client and server together.

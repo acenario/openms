@@ -151,6 +151,8 @@ export class OnlinePrediction {
     const wasReady = this.ready;
     const visibleX = this.simulation.x;
     const visibleY = this.simulation.y;
+    const previousX = this.simulation.previousX;
+    const previousY = this.simulation.previousY;
     // Reconciliation can run between rendered frames. Preserve the pose at this
     // instant, including an existing correction, rather than the previous frame.
     this.interpolate(this.lastObservedAt, this.correctionPose);
@@ -164,8 +166,12 @@ export class OnlinePrediction {
     this.adoptCheckpoint(message, message.motion);
     if (
       wasReady &&
-      Math.hypot(visibleX - this.simulation.x, visibleY - this.simulation.y) >
-        0.001
+      Math.hypot(
+        visibleX - this.simulation.x,
+        visibleY - this.simulation.y,
+        previousX - this.simulation.previousX,
+        previousY - this.simulation.previousY,
+      ) > 0.001
     ) {
       this.corrections++;
       this.reconcilePresentation(visibleX, visibleY, message.authoritative);
@@ -503,15 +509,21 @@ export class OnlinePrediction {
       }
       if (!this.predict(held, this.predictedTick + 1 === desired)) break;
     }
-    if (steps) this.lastStepAt = now;
+    if (steps) {
+      // Keep the fractional part of the scheduled quantum. A late timer wake-up
+      // must not restart interpolation and vary a constant walk's drawn speed.
+      this.lastStepAt =
+        (this.predictedTick - PROTOCOL.INPUT_BUFFER_TICKS) * PROTOCOL.TICK_MS -
+        timing.oneWayMs -
+        timing.tickOffsetMs;
+    }
     this.catchUpDebt = Math.max(0, desired - this.predictedTick);
     return steps;
   }
 
   /** Browser presentation of the newest two authenticated 30 ms kernel states.
-   * The scheduler's actual step time is the interpolation anchor, so timer jitter
-   * stretches one quantum instead of stalling the drawn pose; replay and correction
-   * never move the anchor because they reproduce states that were already presented.
+   * The scheduled boundary is the interpolation anchor, preserving the sub-tick
+   * remainder across timer wake-ups. Replay and correction never move that anchor.
    * @param {number} now Local scheduler time in milliseconds.
    * @param {{x:number,y:number}} target Reused pose scratch; never allocated per frame.
    */

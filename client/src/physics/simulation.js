@@ -169,6 +169,8 @@ export function relocateSimulation(sim, arrival) {
   ) {
     throw new Error("Invalid simulation relocation");
   }
+  // Presentation discontinuity identity; never an input or a physics coefficient.
+  sim.relocationSequence = ((sim.relocationSequence ?? 0) + 1) >>> 0;
   sim.x = Math.max(sim.bounds.left, Math.min(sim.bounds.right, arrival.x));
   sim.y = Math.max(sim.bounds.top, Math.min(sim.bounds.bottom, arrival.y));
   sim.previousX = sim.x;

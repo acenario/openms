@@ -5,6 +5,9 @@ const CLOCK_SAMPLES = 9;
 // still bounds usable history independently; longer liveness probes are not clock fits.
 const MAX_RTT_MS = 3000;
 const MAX_SLEW_MS_PER_SECOND = 60;
+// OpenMS clock-fit policy: a 60 ms/s tick adjustment modulates walking speed by
+// 6%. Fit arrival jitter at <=0.6%; real RTT/field/pause changes still rebase below.
+const MAX_TICK_SLEW_MS_PER_SECOND = 6;
 
 /** Fixed-size median ring; all scratch allocation precedes observation processing. */
 class MedianRing {
@@ -43,8 +46,8 @@ class MedianRing {
   }
 }
 
-function slew(current, target, elapsed) {
-  const maximum = (MAX_SLEW_MS_PER_SECOND * Math.max(0, elapsed)) / 1000;
+function slew(current, target, elapsed, rate = MAX_SLEW_MS_PER_SECOND) {
+  const maximum = (rate * Math.max(0, elapsed)) / 1000;
   return current + Math.max(-maximum, Math.min(maximum, target - current));
 }
 
@@ -147,13 +150,20 @@ export class ServerClock {
     this.fieldEpoch = sample.fieldEpoch;
     this.paused = sample.paused;
     if (this.tickOffsets.count && sample.serverTick < this.serverTick) return;
-    const first = this.tickOffsets.count === 0;
+    // Baselines can spend time in scene preparation. Establish a full clock fit
+    // before limiting its drift; otherwise that initial delay expires live input.
+    const acquiring = this.tickOffsets.count < CLOCK_SAMPLES;
     const median = this.tickOffsets.add(
       sample.serverTick * PROTOCOL.TICK_MS - sample.receivedAt + this.oneWayMs,
     );
-    this.tickOffsetMs = first
+    this.tickOffsetMs = acquiring
       ? median
-      : slew(this.tickOffsetMs, median, sample.receivedAt - this.receivedAt);
+      : slew(
+          this.tickOffsetMs,
+          median,
+          sample.receivedAt - this.receivedAt,
+          MAX_TICK_SLEW_MS_PER_SECOND,
+        );
     this.serverTick = sample.serverTick;
     this.receivedAt = sample.receivedAt;
     this.ready = true;

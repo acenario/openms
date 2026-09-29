@@ -1,48 +1,16 @@
 import { expect, test } from "bun:test";
-import { RemoteMotion } from "../src/online/remote-motion.js";
-import { RemotePlayerPath } from "../src/online/remote-player-path.js";
 import { RemoteAnimationClock } from "../src/online/remote-animation-clock.js";
 import { OnlineScene } from "../src/online/scene.js";
 import {
   DropPresentationMotion,
   projectDrop,
 } from "../src/online/drop-presentation-motion.js";
-import { prepareSegments } from "../src/physics/geometry.js";
 import {
   launchDrop,
   stepDropFlight,
   hoverDrop,
   DROP_MOTION,
 } from "../src/world/drop-motion.js";
-
-function geometry() {
-  const result = prepareSegments([
-    {
-      id: 1,
-      x1: -100,
-      y1: 0,
-      x2: 50,
-      y2: 0,
-      prev: 0,
-      next: 2,
-      layer: 1,
-      group: 1,
-    },
-    {
-      id: 2,
-      x1: 50,
-      y1: 0,
-      x2: 100,
-      y2: 25,
-      prev: 1,
-      next: 0,
-      layer: 1,
-      group: 1,
-    },
-  ]);
-  result.bounds = { left: -1000, right: 1000, top: -1000, bottom: 1000 };
-  return result;
-}
 
 function player(state = "ground", x = 40, y = 0, [vx, vy] = [100, 0]) {
   return {
@@ -65,134 +33,6 @@ function player(state = "ground", x = 40, y = 0, [vx, vy] = [100, 0]) {
     },
   };
 }
-
-function remote(entity) {
-  return new RemoteMotion(entity, 1, 0, new RemotePlayerPath(geometry()));
-}
-
-/** A flat, velocity-consistent peer: samples are exactly what 100 px/s produces. */
-function flatPeer(x) {
-  const entity = player("ground", x, 0, [100, 0]);
-  entity.foothold = null;
-  return entity;
-}
-
-test("a peer is interpolated between two publications without mutating the source", () => {
-  const entity = flatPeer(40),
-    before = structuredClone(entity);
-  const motion = remote(entity);
-  motion.observe(flatPeer(49), 2, 90, null);
-  const drawn = [120, 150, 180, 210, 240, 270].map((ms) => motion.sample(ms).x);
-  for (let index = 1; index < drawn.length; index++) {
-    expect(drawn[index]).toBeGreaterThanOrEqual(drawn[index - 1]);
-  }
-  expect(drawn[drawn.length - 1]).toBeGreaterThan(drawn[0]);
-  expect(entity).toEqual(before);
-  motion.observe(flatPeer(-80), 1, 300, null);
-  expect(motion.tick).toBe(2);
-});
-
-test("a jump coasts to rest instead of extrapolating through the floor", () => {
-  const motion = remote(player("air", 0, -20, [0, -200]));
-  let lowest = 0;
-  for (let ms = 120; ms <= 4000; ms += 20) {
-    lowest = Math.min(lowest, motion.sample(ms).y);
-  }
-  expect(lowest).toBeLessThan(-28);
-  const held = motion.sample(20000).y;
-  expect(held).toBeGreaterThan(-20);
-  expect(motion.sample(60000).y).toBeCloseTo(held);
-  expect(motion.trajectory.fault).toBeNull();
-});
-
-test("a jittery publication stream never draws a backward step", () => {
-  const motion = remote(flatPeer(40));
-  let previous = null,
-    maxBack = 0,
-    next = 0;
-  for (let ms = 0; ms <= 4000; ms += 15) {
-    if (ms >= next) {
-      motion.observe(flatPeer(40 + ms * 0.1), ms / 30, ms, null);
-      next = ms + 60 + ((ms * 7) % 61);
-    }
-    const x = motion.sample(ms).x;
-    if (previous !== null) maxBack = Math.max(maxBack, previous - x);
-    previous = x;
-  }
-  expect(maxBack).toBeLessThan(2);
-});
-
-test("a falling peer stays on its own arc instead of trailing a hundred pixels behind", () => {
-  // Original globals: walkSpeed125, jumpSpeed555, fallSpeed670, gravityAcc2000.
-  const motion = remote(player("air", 0, 0, [125, 670]));
-  let tick = 1,
-    next = 90,
-    worst = 0,
-    previous = null,
-    risen = 0;
-  for (let ms = 0; ms <= 2000; ms += 15) {
-    while (ms >= next) {
-      motion.observe(
-        player("air", (125 * next) / 1000, (670 * next) / 1000, [125, 670]),
-        ++tick,
-        next,
-        null,
-      );
-      next += 90;
-    }
-    const drawn = motion.sample(ms).y;
-    const target = motion.evaluate(motion.renderTime(ms)).y;
-    if (ms >= 300) worst = Math.max(worst, Math.abs(drawn - target));
-    if (previous !== null) risen = Math.max(risen, previous - drawn);
-    previous = drawn;
-    motion.advance(15);
-  }
-  expect(worst).toBeLessThan(2);
-  expect(risen).toBe(0);
-});
-
-test("a drifted pose is bent back into the path, and only a discontinuity is presented", () => {
-  const motion = remote(player("ground", 0, 0, [0, 0]));
-  motion.sample(200);
-  // A walk-sized offset is chased over a few frames, never snapped.
-  motion.x = 60;
-  const first = motion.sample(205).x;
-  expect(first).toBeLessThan(60);
-  expect(first).toBeGreaterThan(0);
-  expect(motion.sample(600).x).toBe(0);
-  // An offset no reconstruction can explain is presented in one frame.
-  motion.x = 150;
-  expect(motion.sample(1600).x).toBe(0);
-});
-
-test("a peer teleport holds its destination until new movement arrives without retaining the old floor", () => {
-  const source = player(),
-    original = structuredClone(source),
-    motion = remote(source);
-  motion.sample(200);
-  motion.relocate(10, -200, 200);
-  expect([motion.sample(1000).x, motion.y]).toEqual([10, -200]);
-  expect(source).toEqual(original);
-  motion.observe(player("air", 10, -200, [100, 0]), 2, 1000, null);
-  expect([motion.x, motion.y]).toEqual([10, -200]);
-  expect(motion.sample(1200).x).toBeGreaterThan(10);
-  expect(motion.y).toBeGreaterThan(-200);
-});
-
-test("ladder, buoyant motion and death preserve their own movement modes", () => {
-  const entity = player("ladder", 10, 50, [0, -100]);
-  entity.playerMotion.ladder = { x: 10, top: 20, bottom: 100 };
-  const ladder = remote(entity);
-  let climbing = 50;
-  for (let ms = 150; ms <= 700; ms += 15) climbing = ladder.sample(ms).y;
-  expect(climbing).toBeLessThan(50);
-  expect(climbing).toBeGreaterThanOrEqual(20);
-  const fly = remote(player("fly", 0, -20, [30, -40]));
-  expect(fly.sample(1200).y).toBeLessThan(-25);
-  const dead = player("air", 0, -20, [30, -40]);
-  dead.combatState.phase = "dead";
-  expect(remote(dead).sample(1200).y).toBe(-20);
-});
 
 test("a climbing peer keeps the published contact plane instead of the foothold it left", () => {
   const depths = [];

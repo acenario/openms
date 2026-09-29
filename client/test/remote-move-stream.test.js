@@ -6,7 +6,6 @@ import {
 } from "../src/physics/simulation.js";
 import { attachGround, prepareSegments } from "../src/physics/geometry.js";
 import { prepareBounds } from "../src/physics/bounds.js";
-import { RemoteMotion } from "../src/online/remote-motion.js";
 import { RemotePlayerPath } from "../src/online/remote-player-path.js";
 import { OnlineScene } from "../src/online/scene.js";
 
@@ -138,13 +137,8 @@ function floorYAt(segments, x) {
 }
 
 /** Replay a delivered sample stream with the real client presentation owner. */
-function replay(trace, samples, segments, ticks) {
-  const motion = new RemoteMotion(
-    samples[0].entity,
-    -1,
-    0,
-    new RemotePlayerPath(segments),
-  );
+function replay(trace, samples, _segments, ticks) {
+  const motion = new RemotePlayerPath(samples[0].entity, 0, 0);
   motion.x = samples[0].entity.position.x;
   motion.y = samples[0].entity.position.y;
   let index = 0;
@@ -152,19 +146,19 @@ function replay(trace, samples, segments, ticks) {
   for (let now = 0; now <= ticks * TICK_MS; now += FRAME_MS) {
     while (index < samples.length && samples[index].at + ONE_WAY_MS <= now) {
       const sample = samples[index];
-      motion.observe(
-        sample.entity,
-        sample.tick,
+      motion.append(
+        {
+          ...sample.entity,
+          tick: sample.tick,
+          durationMs: TICK_MS,
+          moveType: 0,
+        },
         sample.at + ONE_WAY_MS,
-        sample.entity.foothold === null
-          ? null
-          : segments.byId.get(sample.entity.foothold),
       );
       index++;
     }
-    motion.advance(FRAME_MS);
     const pose = motion.sample(now);
-    const contentMs = now - motion.playoutMs - ONE_WAY_MS;
+    const contentMs = now - 60 - ONE_WAY_MS;
     const tick = Math.max(
       0,
       Math.min(trace.length - 1, Math.round(contentMs / TICK_MS)),
@@ -179,53 +173,6 @@ function replay(trace, samples, segments, ticks) {
   }
   return frames;
 }
-
-test("a landing cannot be drawn below the platform it lands on", () => {
-  const segments = geometry();
-  const platform = segments.byId.get(2);
-  const newest = {
-    time: 1000,
-    x: 200,
-    y: -200,
-    vx: 0,
-    vy: 0,
-    movementType: 0,
-    foothold: platform,
-  };
-  const motion = new RemoteMotion(
-    {
-      id: 1,
-      kind: "player",
-      position: { x: 200, y: -220 },
-      velocity: { x: 0, y: 670 },
-      playerMotion: { state: "air" },
-    },
-    -1,
-    0,
-    null,
-  );
-  // Seed an airborne publication and its landed successor exactly as the wire does.
-  motion.clearSamples();
-  motion.samples[0] = {
-    time: 910,
-    x: 200,
-    y: -220,
-    vx: 0,
-    vy: 670,
-    movementType: 0,
-    foothold: null,
-  };
-  motion.samples[1] = newest;
-  motion.head = 0;
-  motion.count = 2;
-  // A Hermite between the two samples would dip ~2 px through the platform near t=0.75.
-  let lowest = -Infinity;
-  for (let offset = 0; offset <= TICK_MS; offset += 1) {
-    motion.evaluate(910 + offset);
-    lowest = Math.max(lowest, motion.scratch.y - newest.y);
-  }
-  expect(lowest).toBeLessThanOrEqual(0);
-});
 
 test("a dense move stream keeps a 500 ms peer on the shared physics trajectory", () => {
   const segments = geometry();
@@ -294,7 +241,12 @@ function peerSceneHost() {
     },
     animation: { actions: new Map(), setTint() {} },
     actionClock: { observe() {} },
-    motion: { observe: (...args) => observed.push(args) },
+    motion: {
+      append: (...args) => {
+        observed.push(args);
+        return true;
+      },
+    },
     drawX: 10,
     drawY: 0,
   };
@@ -302,7 +254,6 @@ function peerSceneHost() {
     selfId: "self",
     fieldEpoch: "field",
     motionNow: 1000,
-    peerClockOffset: null,
     views: new Map([["peer", view]]),
     footholds: new Map([[1, { id: 1, layer: 1, group: 0 }]]),
     updateViewDepth: (entry) => depths.push(entry.entity.id),
@@ -318,6 +269,9 @@ test("the scene applies an un-acked peer sample and keys later frames to its tic
     entries: [
       {
         id: "peer",
+        tick: 20,
+        durationMs: 30,
+        moveType: 0,
         position: { x: 50, y: -10 },
         velocity: { x: 125, y: -100 },
         foothold: null,
@@ -331,15 +285,15 @@ test("the scene applies an un-acked peer sample and keys later frames to its tic
     ],
   });
   expect(observed.length).toBe(1);
-  const [entity, tick, time] = observed[0];
+  const [entity, time] = observed[0];
   expect(entity.position).toEqual({ x: 50, y: -10 });
-  expect(tick).toBe(20);
-  // Sample time is the tick timeline offset once onto the presentation clock.
-  expect(time).toBe(20 * TICK_MS + (1000 - 20 * TICK_MS));
+  expect(entity.tick).toBe(20);
+  // Receipt supplies the current clock, never a synthetic packet timestamp.
+  expect(time).toBe(1000);
   expect(view.motionTick).toBe(20);
   expect(view.drawX).toBe(10);
   expect(host.views.has("ghost")).toBe(false);
-  expect(depths).toEqual(["peer"]);
+  expect(depths).toEqual([]);
 });
 
 test("a peer sample from a retired field is ignored outright", () => {
@@ -350,6 +304,9 @@ test("a peer sample from a retired field is ignored outright", () => {
     entries: [
       {
         id: "peer",
+        tick: 20,
+        durationMs: 30,
+        moveType: 0,
         position: { x: 90, y: 0 },
         velocity: { x: 0, y: 0 },
         foothold: 1,
@@ -388,10 +345,8 @@ function loadingPeer(x = 0, y = -100) {
 }
 
 test("a still-loading peer holds its spawn instead of dropping once per round trip", () => {
-  const segments = geometry();
   // The ordered state frame alone must not arm the free-fall forecast.
-  const motion = new RemoteMotion(loadingPeer(), -1, 0, null);
-  motion.pendingTrajectory = new RemotePlayerPath(segments);
+  const motion = new RemotePlayerPath(loadingPeer(), -1, 0);
   let tick = 1;
   let lowest = -Infinity;
   for (let now = 0; now <= 4000; now += 15) {
@@ -399,37 +354,53 @@ test("a still-loading peer holds its spawn instead of dropping once per round tr
     if (now % 500 === 0) motion.observe(loadingPeer(), tick++, now, null);
     lowest = Math.max(lowest, motion.sample(now).y);
   }
-  expect(motion.trajectory).toBeNull();
+  expect(motion.count).toBe(0);
   // Never more than a rounding error below the frozen spawn, at any latency.
   expect(lowest).toBeLessThanOrEqual(-100 + 0.01);
 });
 
-test("the first un-acked move sample arms the shared-geometry forecast", () => {
+test("the first move sample owns the path and later membership frames cannot replay it", () => {
   const { host, view } = peerSceneHost();
-  const armed = [];
-  view.motion = {
-    trajectory: null,
-    pendingTrajectory: { observe: (entity) => armed.push(entity) },
-    observe: () => {},
+  view.motion = new RemotePlayerPath(loadingPeer(), -1, 0);
+  const entry = {
+    ...loadingPeer(10),
+    tick: 20,
+    durationMs: 30,
+    moveType: 0,
   };
   OnlineScene.prototype.peers.call(host, {
     fieldEpoch: "field",
     tick: 20,
-    entries: [
-      {
-        id: "peer",
-        position: { x: 50, y: -10 },
-        velocity: { x: 125, y: -100 },
-        foothold: null,
-        facing: 1,
-        action: 2,
-        actionStartTick: 20,
-        playerMotion: { state: "air" },
-      },
-    ],
+    entries: [entry],
   });
-  expect(view.motion.trajectory).toBeTruthy();
-  expect(view.motion.pendingTrajectory).toBeNull();
-  expect(armed.length).toBe(1);
-  expect(armed[0].position).toEqual({ x: 50, y: -10 });
+  expect(view.motion.streamOwned).toBe(true);
+  view.motion.observe(loadingPeer(999), 30, 1000);
+  expect(view.motion.count).toBe(1);
+  expect(view.motion.tick).toBe(20);
+  view.motion.sample(1060);
+  expect(view.motion.x).toBe(10);
+});
+
+test("scene baseline resets reused peer playback and a delayed teleport event cannot flush it", () => {
+  const { host, view } = peerSceneHost();
+  view.motion = new RemotePlayerPath(loadingPeer(), 0, 0);
+  view.motion.append(
+    { ...loadingPeer(20), tick: 1, durationMs: 30, moveType: 0 },
+    0,
+  );
+  view.motionTick = 1;
+  host.tick = 50;
+  OnlineScene.prototype.resetPeerPath.call(host, loadingPeer(90));
+  expect(view.motionTick).toBeUndefined();
+  expect(view.motion.sample(host.motionNow)).toMatchObject({ x: 90, y: -100 });
+  view.motion.append(
+    { ...loadingPeer(100), tick: 51, durationMs: 30, moveType: 0 },
+    host.motionNow,
+  );
+  OnlineScene.prototype.relocateObserved.call(host, {
+    actorId: "peer",
+    destination: { x: -10, y: 0 },
+  });
+  expect(view.motion.count).toBe(1);
+  expect(view.motion.sample(host.motionNow + 60).x).toBe(100);
 });

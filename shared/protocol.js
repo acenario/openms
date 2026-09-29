@@ -447,8 +447,8 @@ function mobEntityFragments(value) {
 }
 
 /** Closed per-tick presentation projection of another actor's own simulation. It carries
- *  no input, inventory or private checkpoint: only what the native move path (0xb6) made
- *  observable, at the sender's fixed 30 ms sampling cadence. */
+ *  no input, inventory or private checkpoint. Native player paths use opcode 0xb9;
+ *  this wire adaptation publishes server-simulated samples every 30 ms. */
 const playerMotionSchema = record({
   state: enumeration("ground", "air", "ladder", "swim", "fly"),
   gravity: number(0, 1000000, false),
@@ -465,6 +465,9 @@ const playerMotionSchema = record({
 
 const peerMotionSchema = record({
   id,
+  tick: revision,
+  durationMs: number(0, 32767),
+  moveType: enumeration(0, 3),
   position: point,
   velocity: point,
   foothold: nullable(u32),

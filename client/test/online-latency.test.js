@@ -181,6 +181,46 @@ test("small RTT noise cannot reset the field clock from a delayed packet burst",
   expect(Math.abs(clock.tickOffsetMs - before)).toBeLessThan(5);
 });
 
+test("arrival jitter cannot modulate the high-ping movement clock by more than one percent", () => {
+  const clock = new ServerClock();
+  let variation = 0;
+  for (let index = 0; index <= 100; index++) {
+    const before = clock.tickOffsetMs;
+    const jitter = Math.floor(index / 9) % 2 ? 10 : 0;
+    clock.observe({
+      connectionEpoch: "connection",
+      fieldEpoch: "field",
+      paused: false,
+      serverTick: 100 + index,
+      receivedAt: 30000 + index * 30 + jitter,
+      roundTripMs: index === 0 ? 2000 : null,
+    });
+    if (index >= 9) variation += Math.abs(clock.tickOffsetMs - before);
+    const target = inputTargetTick(clock, clock.receivedAt);
+    expect(target).toBeGreaterThan(clock.serverTick);
+  }
+  expect(variation / 3000).toBeLessThan(0.01);
+  expect(clock.ready).toBe(true);
+});
+
+test("a delayed startup baseline cannot leave live high-ping input scheduled in the past", () => {
+  const clock = new ServerClock();
+  for (let index = 0; index <= 12; index++) {
+    clock.observe({
+      connectionEpoch: "connection",
+      fieldEpoch: "field",
+      paused: false,
+      serverTick: 100 + index,
+      receivedAt: 30000 + index * 30 + (index === 0 ? 25 : 0),
+      roundTripMs: 2000,
+    });
+  }
+  // Current server time + one more network leg: the input must arrive in the future.
+  const actualArrivalTick = 112 + 2000 / PROTOCOL.TICK_MS;
+  expect(inputTargetTick(clock, 30360)).toBeGreaterThan(actualArrivalTick);
+  expect(clock.tickOffsetMs).toBeCloseTo(-26000, 5);
+});
+
 test("input schedules up to two-second RTT with jitter reach the server before their target tick", () => {
   for (const roundTripMs of [0, 100, 500, 1000, 2000, 2100]) {
     const clock = new ServerClock();

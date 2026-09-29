@@ -173,7 +173,7 @@ function presentable(onGroundJump) {
     roundTripMs: 0,
     oneWayMs: 0,
     offsetMs: 0,
-    tickOffsetMs: 0,
+    tickOffsetMs: 6 * PROTOCOL.TICK_MS - clock,
     receivedAt: clock,
     paused: false,
   });
@@ -272,16 +272,44 @@ test("presentation never writes the interpolated pose back into the kernel", () 
   expect(captureMotion(simulation)).toEqual(before);
 });
 
+test("late scheduler wakes preserve the sub-tick phase of a steady local walk", () => {
+  const clock = spyOn(performance, "now").mockReturnValue(6000);
+  try {
+    const { prediction, simulation } = presentable();
+    const held = createHeldInput();
+    held.right = true;
+    const jitter = [13, 21, 9, 17, 23];
+    let previous = null;
+    let now = 6000;
+    for (let frame = 0; frame < 140; frame++) {
+      now += jitter[frame % jitter.length];
+      clock.mockReturnValue(now);
+      prediction.advance(now, held);
+      const x = prediction.interpolate(now, {}).x;
+      if (frame > 40) {
+        expect(simulation.vx).toBe(125);
+        expect(x - previous.x).toBeCloseTo((now - previous.now) * 0.125, 7);
+      }
+      previous = { x, now };
+    }
+    expect(prediction.overflows).toBe(0);
+    expect(prediction.catchUpDebt).toBe(0);
+  } finally {
+    clock.mockRestore();
+  }
+});
+
 test("a checkpoint correction preserves the pose between movement ticks", () => {
   const clock = spyOn(performance, "now").mockReturnValue(1000);
   try {
     const { prediction, simulation } = presentable();
     prediction.lastStepAt = 985;
     const before = { ...prediction.interpolate(1000, {}) };
-    for (const shift of [0.63, 12]) {
+    for (const shift of [0.63, 12, 0]) {
       const motion = captureMotion(simulation);
       motion.x -= shift;
-      motion.previousX -= shift;
+      // A changed previous state also alters the drawn pose when current X agrees.
+      motion.previousX -= shift || 9;
       prediction.observe({
         connectionEpoch: "epoch",
         fieldEpoch: "field",

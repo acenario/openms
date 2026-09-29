@@ -10,6 +10,7 @@ import {
   details,
 } from "./online-ui-repairs.js";
 import { login } from "./online-recycling-scrolls.js";
+import { reconnect } from "./online-latency.js";
 import { clickLabel } from "./native.js";
 
 const pause = (ms) =>
@@ -103,6 +104,7 @@ function analyze(rows, id) {
     changedAt = 0;
   let minimumY = Infinity,
     maximumY = -Infinity;
+  const path = { heldFrames: 0, dryMovement: 0, queued: 0, snaps: 0 };
   for (const row of rows) {
     const actor = row.actors.find((entry) => entry.id === id);
     if (!actor || !actor.visible) continue;
@@ -114,6 +116,9 @@ function analyze(rows, id) {
         actor.renderY - previous.renderY,
       );
       maximumStep = Math.max(maximumStep, step);
+      if (actor.movePath) {
+        analyzePath(path, actor, previous, row.time - changedAt);
+      }
       if (
         actor.observedX !== previous.observedX ||
         actor.observedY !== previous.observedY
@@ -125,7 +130,78 @@ function analyze(rows, id) {
     } else changedAt = row.time;
     previous = actor;
   }
-  return { id, maximumStep, moving, lateMoving, minimumY, maximumY };
+  return { id, maximumStep, moving, lateMoving, minimumY, maximumY, path };
+}
+
+function analyzePath(result, actor, previous, age) {
+  const step = Math.hypot(
+    actor.renderX - previous.renderX,
+    actor.renderY - previous.renderY,
+  );
+  const path = actor.movePath;
+  result.queued = Math.max(result.queued, path.queued);
+  result.snaps = Math.max(result.snaps, path.backlogSnaps + path.capacitySnaps);
+  if (
+    age > 90 &&
+    path.queued === 0 &&
+    previous.movePath?.queued === 0 &&
+    actor.observedX === previous.observedX &&
+    actor.observedY === previous.observedY
+  ) {
+    result.heldFrames++;
+    result.dryMovement = Math.max(result.dryMovement, step);
+  }
+}
+
+async function verifyReconnect([mover, observer]) {
+  const initial = await mover.evaluate(
+    () => window.mapleOnline.observation().self.entity,
+  );
+  await Promise.all([reconnect(observer), moveDuringReconnect(mover)]);
+  const before = await mover.evaluate(
+    () => window.mapleOnline.observation().self.entity,
+  );
+  assertion(
+    Math.abs(before.position.x - initial.position.x) > 10,
+    "Peer did not move during reconnect",
+    { initial, before },
+  );
+  await observer.waitForFunction(
+    (id) =>
+      window.maple
+        .snapshot()
+        .actors.some(
+          (actor) =>
+            actor.id === id &&
+            Math.abs(actor.x - actor.observedX) < 0.01 &&
+            Math.abs(actor.y - actor.observedY) < 0.01 &&
+            Math.abs(actor.renderX - actor.observedX) < 1 &&
+            Math.abs(actor.renderY - actor.observedY) < 1,
+        ),
+    {},
+    before.id,
+  );
+  const after = await observer.evaluate(
+    (id) => window.maple.snapshot().actors.find((actor) => actor.id === id),
+    before.id,
+  );
+  assertion(
+    Math.hypot(
+      after.renderX - before.position.x,
+      after.renderY - before.position.y,
+    ) < 1,
+    "Reconnect did not restore the settled peer position",
+    { before, after },
+  );
+  return { id: before.id, x: after.renderX, y: after.renderY };
+}
+
+async function moveDuringReconnect(mover) {
+  await focusGame(mover);
+  await mover.keyboard.down("ArrowLeft");
+  await pause(600);
+  await mover.keyboard.up("ArrowLeft");
+  await pause(1100);
 }
 
 async function verify(pages, url, report) {
@@ -136,15 +212,37 @@ async function verify(pages, url, report) {
     "Source changed during check",
   );
   if (!report.baseline) {
+    if (report.drop) {
+      assertion(
+        report.drop.lateMoving > 0,
+        "Drop stopped animating while updates were held",
+        report.drop,
+      );
+      assertion(
+        report.drop.maximumY < 335,
+        "Drop was projected below its landing floor",
+        report.drop,
+      );
+    }
     assertion(
-      report.drop.lateMoving > 0,
-      "Drop stopped animating while updates were held",
-      report.drop,
+      report.peer.path.heldFrames > 0,
+      "Dry movement path was not exercised",
+      report.peer,
     );
     assertion(
-      report.drop.maximumY < 335,
-      "Drop was projected below its landing floor",
-      report.drop,
+      report.peer.path.dryMovement < 0.01,
+      "Peer extrapolated an exhausted path",
+      report.peer,
+    );
+    assertion(
+      report.peer.path.queued > 1,
+      "Delayed movement was not replayed as a queue",
+      report.peer,
+    );
+    assertion(
+      report.peer.path.snaps === 0,
+      "Ordinary delay caused a recovery snap",
+      report.peer,
     );
     assertion(
       report.peer.maximumStep < 20,
@@ -160,11 +258,13 @@ export async function runRemoteMotion({
   network,
   output,
   baseline,
+  scope = "all",
 }) {
   await mkdir(output, { recursive: true });
   const report = {
     status: "running",
     baseline,
+    scope,
     timings: {},
     errors: [],
     results: [],
@@ -184,8 +284,13 @@ export async function runRemoteMotion({
     report.peer = await measureStage(report.timings, "peer", () =>
       walkAndJump(pages, network, output),
     );
-    report.drop = await measureStage(report.timings, "drop", () =>
-      drop(pages, network, output),
+    if (scope === "all") {
+      report.drop = await measureStage(report.timings, "drop", () =>
+        drop(pages, network, output),
+      );
+    }
+    report.reconnect = await measureStage(report.timings, "reconnect", () =>
+      verifyReconnect(pages),
     );
     await verify(pages, url, report);
     report.status = "pass";

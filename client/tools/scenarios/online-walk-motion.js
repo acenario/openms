@@ -24,6 +24,7 @@ function sampleFrames() {
     const state = window.maple.snapshot();
     probe.rows.push({
       time,
+      presentationAt: state.presentationAt,
       x: state.presentation.x,
       y: state.presentation.y,
       kernelX: state.simulation.x,
@@ -81,7 +82,28 @@ function analyze(rows, hold) {
     stalls,
     maximumBackstep,
     longestPauseMs,
+    speed: analyzeSpeed(rows, hold),
   };
+}
+
+/** Detect timer-induced speed pulses even when every rendered step goes forward. */
+function analyzeSpeed(rows, hold) {
+  let count = 0,
+    squaredError = 0,
+    maximumError = 0;
+  for (let index = 1; index < rows.length; index++) {
+    const before = rows[index - 1];
+    const after = rows[index];
+    if (before.time < hold.started + 700 || after.time > hold.ended) continue;
+    const elapsed = after.presentationAt - before.presentationAt;
+    if (elapsed <= 0) continue;
+    const speed = ((after.x - before.x) * 1000) / elapsed;
+    const error = Math.abs(speed - after.vx);
+    count++;
+    squaredError += error * error;
+    maximumError = Math.max(maximumError, error);
+  }
+  return { count, rmsError: Math.sqrt(squaredError / count), maximumError };
 }
 
 /** A safe town floor isolates walking from mob hits, attacks and wall collisions. */
@@ -235,6 +257,12 @@ function verify(report) {
     assertion(walk.frames >= 80, "Insufficient steady walking frames");
     assertion(walk.maximumBackstep < 1, "Held walking visibly moves backward");
     assertion(walk.longestPauseMs < 100, "Held walking visibly pauses");
+    if (!walk.stall) {
+      assertion(
+        walk.speed.rmsError < 3,
+        "Steady walking has visible speed pulses",
+      );
+    }
   }
   if (report.scope === "landing") {
     assertion(

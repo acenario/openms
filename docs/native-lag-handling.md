@@ -1,8 +1,8 @@
 # Original client lag handling
 
-For the proposed OpenMS prediction, action-queue and server-authority design, see
-[Optimistic client and delayed actions](optimistic-client.md). This page records
-original-client evidence; that proposal separates immediate feedback from trusted outcomes.
+For OpenMS prediction, action queues and server authority, see
+[Optimistic client and delayed actions](optimistic-client.md). This page distinguishes
+original-client evidence from OpenMS policy and the implemented movement replay.
 
 ## Scope and provenance
 
@@ -23,8 +23,8 @@ New reusable tools added by this investigation:
 - `docs/tools/lagDwordScan.java` — global dword-value scan, used to show that `0094a144`
   and `009581a9` are each referenced from exactly one table slot.
 - `docs/tools/lagVtables.java`, `docs/tools/lagVtableMatch.java` — candidate-vtable
-  enumeration and cross-correlation. They found no second table sharing the local-user
-  method layout, so the remote-user class boundary remains open (see below).
+  enumeration and cross-correlation. Their initial search was inconclusive; the
+  September 29 constructor/owner trace below establishes the remote-player boundary.
 
 The client is not built with recoverable class RTTI: only 16 `.?AV` descriptors exist and
 they are all exception/`std` types. Class boundaries below are therefore established by
@@ -37,9 +37,10 @@ flowchart TD
   Attack --> Roll[009581a9 roll damage, MISS, min 1]
   Roll --> Popup[0066b05e mob damage popup]
   Attack --> Schedule[0043da05 schedule at now + delay]
-  Step[009b195f fixed 30 ms local step] --> Move[local controller]
-  Recv[0xb6 / 0xb9 move packet] --> Decode[0068a33c decode to list]
-  Decode --> Replay[009b1719 replay slot +0x5c]
+  Step[009b195f fixed 30 ms local step] --> Move[009cbefb local controller]
+  Move --> Send[009cb992 send completed path: 0x29]
+  Recv[0xb9 remote player move] --> Decode[0068a33c decode to list]
+  Decode --> Replay[009b1719 replay slot +0x34]
   Replay --> Hermite[0068b108 Hermite interpolation]
   Clock[00987257 master ms clock] --> Schedule
   Clock --> Draw[004375b1 displayer update]
@@ -104,9 +105,22 @@ input dispatch (`0094c856` at `0094a1c9`), the action handler (`0095bedf` at `00
 `+0x28`, `+0x2c`, `+0x38`) rather than integrating directly.
 
 Consequence: character logic advances in fixed 30 ms quanta independent of render rate and
-of packet timing, while every animation reads a millisecond wall clock. The state snapshot
-at `+0x20 → +0x80` is a previous-step copy; its exact presentation consumer was **not**
-recovered here.
+of packet timing, while animations read a millisecond clock. The follow-up below recovers
+the exact consumer of the `+0x20 → +0x80` previous-step copy.
+
+**Rendered movement (`009b6205`, verified again September 29).** The vector interface
+points twelve bytes into the controller. It reads previous X at interface `+0x74`
+(controller `+0x80`) and current X at interface `+0x14` (controller `+0x20`), and the
+corresponding Y fields. `009b6277` obtains the graphics clock through `00776dda`
+(graphics singleton `DAT_00bf14ec`, COM slot `+0x40`). `009b627c..009b6292` computes
+`remaining = (applicationTime - graphicsTime) / 30`, with `00b3e3b0 = 1/30`.
+`009b62c1..009b62cd` evaluates `current + (previous - current) * remaining`.
+The result is rounded using `+0.5` for nonnegative values or `-0.499999999` for
+negative values before integer conversion. Y and the secondary XY outputs repeat the
+same calculation. An attached external vector is delegated to its COM getter instead.
+This is between-step render interpolation, separate from remote-path Hermite replay;
+packet timestamps and ping do not enter this getter. Ghidra omits the x87 arithmetic
+in its abbreviated C, so the instruction range `009b6259..009b641a` is the evidence.
 
 Remote characters use a third clock: their own fixed 30/32 ms move-path step, described
 under [remote characters](#remote-characters-buffered-move-path-replay). Packet arrival
@@ -114,7 +128,8 @@ refills the replay buffer; it does not advance either clock.
 
 ## Local character: input-driven and immediately responsive
 
-Input is read only while the game window has focus. `009cf76f` compares the singleton's
+Input is read only while the game window has focus. The player controller `009cbefb`
+(vtable slot `00b3ead0`, paired with sender `009cb992` at `00b3ead4`) compares the singleton's
 window handle `*(DAT_00be7b38 + 4)` against `(*DAT_00bf04e0)()`, reads key state through
 `FUN_00451b6a`/`FUN_0059a25a`, then calls `FUN_009b7b4a(dirX, dirY)` and `FUN_009b19d0()`
 to steer the local movement controller. Nothing in this path waits on the network.
@@ -139,9 +154,54 @@ FUN_00950921(local_c, local_10, 0, 0, 0, local_8, 0);   // attack
 `00500971` returns `1000` for the action codes it recognises and `2000` otherwise, so the
 clamp is always `[30, 1000]` or `[30, 2000]` ms. The local attack routines
 `00950921`, `009537d5` and `0095571f` are invoked from this edge, before any server reply.
-The movement-packet send cadence itself was **not** recovered in this pass; only the
-imported socket surface is known (`NMCO_CallNMFunc`/`NMCO_MemoryFree` from
-`nmcogame.dll`, used through `006bea13`, whose callers build individual packets).
+
+### Completed motion is sent after simulation
+
+`009cbcbd` records the current XY, velocity, foothold, action and elapsed quantum with
+`0068ab85`. The recorder accumulates elapsed time at path `+0x5c`; ordinary types
+0, 15 and 17 coalesce while type, footholds, action and velocity sign/zero transitions
+agree. A turn, takeoff, landing or action change therefore creates a new path element;
+it does not discard the intermediate trajectory.
+
+`0068a828` makes a nonempty path ready after 500 ms when flag `+0x40` is set, otherwise
+1000 ms with an additional positive-foothold condition. **Players use the set flag.**
+The local and remote constructors install owner interfaces at `user+4`
+(`00948e33`, `0097f411`), whose tables `00b3d1e8` and `00b3d874` both start with
+`004b237c`, returning type zero. Calls at `00949685` and `0097f72b` bind `user+4`
+through `009b1288` into controller `+0x14`. `009b13fa..009b1447` selects the flag for
+owner types 0, 3, 4 or 8. This closes the earlier unknown player-threshold choice.
+
+When ready, `009cb992` quantizes XY/velocity into the last packed node, prepares opcode
+**0x29** (`009cbb2a`), adds field-related header fields and serializes the path through
+`0068a88d → 0068a563`. The serializer writes the starting XY and the element count,
+then type-dependent endpoint/velocity/contact/action/duration fields. It suppresses an
+unchanged ordinary tail unless another recorded change or type-10 event requires sending.
+`009cbb77..009cbb81` sends through the game socket `DAT_00be7914 → 0049637b`.
+The path is retired locally; this send path has no acknowledgement wait, input-sequence
+replay or server-checkpoint restore. The player's own physics and drawing continue.
+
+### Ordinary echoes and explicit corrections are different paths
+
+Player move opcode **0xb9** takes `009724f9 → 00971709` (the remote-player map lookup)
+and `009726ae → 0068b371` (the controller path). The separate lookup `009716ed` first
+checks the local character at manager `+8`, then falls back to `00971709`; ordinary
+player movement dispatch deliberately uses the latter. This evidence does **not** show
+an ordinary movement echo correcting the local player. It is not an acknowledgement
+and rollback protocol like OpenMS's.
+
+Local server packet dispatch is separate: `009726d3 → 00950747`, opcodes 0xcd..0xea.
+For example, 0xcf reaches `00959727`, selects a server-specified field portal and calls
+the local relocation path `00957b74`. The position setter `009cb96b`, reached from
+the 0xcd handler `00959797`, dispatches vector COM slot `+0x40` to `009b5e7f`.
+That setter clears contact, sets **both previous and current XY**, zeros both velocities
+and records move type 3 for an active controller. A relocation therefore draws at its
+destination immediately instead of interpolating across the map. Incoming impulses and
+movement skills are distinct from ordinary movement echoes.
+
+The supplied directory contains no original server implementation. Its path validation,
+anti-cheat tolerances and reasons for sending forced relocations cannot be recovered from
+these client paths. There is no evidence here for a native 120/600 ms local correction
+ease or an input-history reconciliation algorithm; those remain OpenMS policies.
 
 ## Remote characters: buffered move-path replay
 
@@ -149,8 +209,8 @@ Remote actors do not run the local physics kernel. The server sends a move path;
 decodes it into a list of 0x18-byte samples and replays that list on its own fixed-step
 clock, interpolating between samples. This is the mechanism that hides packet jitter.
 
-**Receive.** Move packets arrive through `0053e5a6 → 00531325 → 0097208c`. The user move
-handler is opcode `0xb6` (`0093908f → 004fef90`) and the mob move handler is opcode `0xb9`
+**Receive.** Move packets arrive through `0053e5a6 → 00531325 → 0097208c`. One entity-family move
+handler is opcode `0xb6` (`0093908f → 004fef90`) and the remote-player handler is opcode `0xb9`
 (`009726ae`); both resolve the actor's controller and call `0068b371`, the path setter
 (named `CMovePath::SetMovePath` by shape; no class names survive in the binary). The same
 setter serves the other entity families too (callers `004fefa9`, `009726cb`, `0066c1e5`,
@@ -164,7 +224,7 @@ records of 0x18 bytes:
 | `+0x00`       | move type `0..0x16` (jump table at `0068a507`)          |
 | `+0x02/+0x04` | x, y                                                    |
 | `+0x06/+0x08` | vx, vy                                                  |
-| `+0x0a`       | movement attribute/action, used as `1 << (attr & 0x1f)` |
+| `+0x0a`       | movement attribute/action (separate from the move-type mask) |
 | `+0x0c`       | foothold id                                             |
 | `+0x10`       | `tMove`: element **duration** in ms, not a timestamp    |
 
@@ -178,9 +238,9 @@ the accumulated path time reaches `X'`, otherwise **30 ms**, where `X' = (int)(X
 carries over between packets — `SetMovePath` never resets `+0x84` — so consecutive updates
 join without a seam.
 
-**Replay (`009b1719`, controller vtable slot `+0x5c` → `0068adcc`).** Each call advances
+**Replay (`009b1719`, controller vtable slot `+0x34` → `0068adcc`).** Each call advances
 `m_tCur += m_tStep`, consumes every sample whose `tMove` has elapsed (subtracting `tMove`
-and accumulating an attribute bitmask), caches the consumed sample's x/y/vx/vy/foothold and
+and accumulating a **move-type** bitmask), caches the consumed sample's x/y/vx/vy/foothold and
 then interpolates:
 
 ```asm
@@ -194,11 +254,12 @@ then interpolates:
 **Cubic Hermite interpolation (`0068b108`).** With `t = m_tCur / next.tMove`:
 
 ```c
-h00 = 3*t*t - 2*t*t*t;        // smoothstep
-h10 = 1 - h00;                // 2t^3 - 3t^2 + 1
-w5  = (t*t - 2*t + 1) * dt;   // (1-t)^2 * dt
-w6  = (t*t - t) * dt;         // t*(t-1) * dt
-x = prevVx*w6 + prevX*h10 + nextVx*w5 + nextX*h00;
+u = elapsedMs / durationMs;
+wNext = 3*u*u - 2*u*u*u;
+wPrev = 1 - wNext;
+vPrev = elapsedMs * 0.001 * (u*u - 2*u + 1);
+vNext = elapsedMs * 0.001 * (u*u - u);
+x = prevX*wPrev + nextX*wNext + prevVx*vPrev + nextVx*vNext;
 ```
 
 Both the previous sample's **position and velocity** participate, so the replay reproduces
@@ -208,15 +269,103 @@ the sender's curve between samples instead of lerping. Output velocity is re-der
 **End of path and long gaps.** When the list empties it is cleared and the actor **holds its
 last position and velocity**; there is no extrapolation branch, so a remote actor that stops
 sending simply stops. A newly received path whose unconsumed time exceeds `X' + 5000` ms
-(about 5.5–6.1 s) is discarded and replaced by one synthetic `moveType == 3` sample, which
-the replay applies as a hard snap. Both are deliberate policy choices: hold for ordinary
-gaps, snap only when the backlog proves the actor has already moved on.
+(about 5.5–6.1 s) is discarded and replaced by one synthetic `moveType == 3` sample, at the **newest** endpoint, which
+the replay applies as a hard snap. `009b17ec..009b17fc` tests move-type bit 3 and
+copies current state into previous state, so the snap bypasses between-step interpolation.
+Both are deliberate policy choices: hold for ordinary gaps, snap only when the backlog
+proves the actor has already moved on.
 
-**Open.** The exact per-frame actor loop that calls slot `+0x5c` was not located. After
-scanning all 1 619 911 instructions, the only `CALL [reg+0x5c]` sites are COM/UI wrappers,
-no controller vtable address is ever written as an immediate, and the objects appear to take
-their vptr from a data template. The entity linkage is proved (user controller pointer at
-`+0xdc`, mob at `+0x11a4`), but the driver that invokes the replay remains open.
+**Remote update driver (closed September 29).** The earlier search used the wrong
+vtable offset. Remote-player update `0097fdf8` loads `user+0x11a4`, subtracts the
+12-byte vector-interface adjustment, and calls `009b16e8` at `0097fe1b`. That dispatcher
+calls controller slot `+0x30` (`009b1703`, copying current into previous), then slot
+`+0x34` (`009b1719`, replay) with a literal 30 ms argument. The player controller table
+at `00b3eaa8` contains those entries at `00b3ead8` and `00b3eadc`. This closes the path
+from the remote actor update through replay to the interpolated vector getter; the
+older `+0x5c` and user `+0xdc` identifications were incorrect.
+
+## Movement implementation and instruction recheck (2026-09-29)
+
+The same supplied executable was hashed again and its instructions read directly with
+Apple LLVM `objdump`; no external client/server implementation was used. Reproduce the
+critical ranges without a saved Ghidra project:
+
+```sh
+shasum -a 256 ../Maplestory-Client/Maplestory_UNPACKED.exe
+objdump -d --start-address=0x68adcc --stop-address=0x68b16f ../Maplestory-Client/Maplestory_UNPACKED.exe
+objdump -d --start-address=0x68b371 --stop-address=0x68b4e6 ../Maplestory-Client/Maplestory_UNPACKED.exe
+objdump -d --start-address=0x9b1719 --stop-address=0x9b19d0 ../Maplestory-Client/Maplestory_UNPACKED.exe
+```
+
+This recheck corrects three earlier interpretations: the Hermite velocity weights above
+were previously reversed; `0068ae2b..0068ae3e` masks the **move type**, not the action;
+and `0068b486` copies list `+0x20` (tail), whereas consumption at `0068ae28` reads
+`+0x1c` (front). Long-backlog recovery therefore selects the newest received endpoint.
+The earlier abbreviated decompilation in `ghidra-physics-motion/peer-move-path.txt`
+stops at the controller address; it is not complete evidence for the setter or weights.
+Also, `0093908f` routes `0xb6` through an object at user `+0x1f30`; this proves an
+entity-family path receiver, not that `0xb6` is the main player movement opcode. The
+shared duration/replay algorithm is established independently of that class name.
+
+[RemotePlayerPath](../client/src/online/remote-player-path.js) now ports the recovered
+queue, 30/32 ms step selection, Hermite arithmetic, exhausted-path hold and newest-endpoint
+backlog snap. Receiving another packet preserves the partial-element clock. Facing,
+action and contact follow the replayed element. There is no remote-player gravity
+forecast, exponential coast, distance-based snap or adaptive arrival-time playout delay.
+A short legitimate teleport uses explicit move type 3, even below the former 96-pixel
+snap threshold. A late teleport visual event cannot apply that displacement twice.
+
+The [peer publisher](../server/src/peer-move-stream.js) supplies server-simulated 30 ms
+samples with individual source ticks and durations. Rotation now retains intermediate
+samples in crowded fields rather than overwriting them with the next position. Idle
+identical states are omitted; the receiver holds at the last endpoint. This is an OpenMS
+wire adaptation, not the original packed i16 codec or original send cadence. Its bounded
+256-entry queue falls back explicitly to a relocation on overload; one frame still
+carries at most 24 samples. Field replacement creates a new queue.
+
+The browser schedules a replay call per 30 ms and interpolates the previous/current
+outputs for display. At most eight calls run per frame, with remaining debt exposed in
+inspection. These scheduling/storage bounds are browser adaptations. The native path
+flag `+0x40` is set from an argument at `0068aac7`; `009b13fa..009b1447` selects it
+for owner type values 0, 3, 4 or 8. Both recovered thresholds (550/1100 ms, snap after
+another 5000 ms) are tested. The owner-interface trace above proves player type zero, selecting the **550 ms**
+branch; OpenMS now uses it. Mob snapshot forecasting remains a separate OpenMS policy.
+
+**Local correction boundary.** The recovered local input/controller path does not wait
+for a server echo. OpenMS already implements immediate local 30 ms input prediction,
+trusted checkpoint restore, silent retained-input replay and contact-constrained visual
+easing. The supplied directory contains no original server executable/source, and this
+inspection does not establish its validation, acknowledgement/replay protocol or a local
+correction smoothing constant. Those existing OpenMS mechanisms remain explicitly
+OpenMS authority policy; adopting client-reported positions would not follow from this
+client evidence. Long upstream stalls can still cause corrections when inputs expire.
+
+The follow-up also corrected local presentation timing: interpolation now preserves the
+scheduled quantum's fractional remainder, due fixed steps complete before drawing, and
+one fresh local time sample drives both operations. Reconciliation detects changes to
+previous as well as current XY. The server tick clock acquires nine samples promptly,
+then slews by at most 6 ms/s so arrival jitter cannot visibly pulse walking speed.
+These clock-fit bounds are OpenMS policy. See the
+[2,000 ms RTT measurements](validation.md#native-movement-clocks-at-high-latency-2026-09-29)
+for walking, landing, delivery-stall recovery and the remaining scope limits.
+
+Focused proof uses `client/test/native-move-path.test.js`,
+`client/test/remote-move-stream.test.js` and `server/test/remote-presentation.test.js`.
+[Browser procedure](validation-method.md#remote-player-and-drop-check) covers native
+walking/jumping, a delivery pause and reconnect with two isolated accounts. Neither
+binary inspection nor these browser checks establishes an original Windows visual match.
+
+The focused two-player browser run passed at 500 ms RTT with a 450 ms traffic stall:
+81 sampled dry-path frames, zero dry-path displacement, a maximum queue of 16 samples,
+no recovery snaps and maximum rendered frame displacement 9.22 pixels. Native movement
+that finished during the observer's reconnect restored correctly from the new baseline.
+Command: `bun server/tools/check-remote-motion.js --scope players --output /tmp/openms-native-move-path-reconnect-20260929`.
+Source build: `19c4fa8cd5ab412d143849e0e2424486e65b70b69d4470f5d27628f681f2239e`;
+rules: `8d08d37cff32d1b2da699628aea3c4719f14a3299d29cc5b0f234f660e1e7f2e`;
+catalog: `bf4d12c856304ed77c55a1296dcd7bf82d11f2bea505e111c517ae1b1e482af4`.
+An initial reconnect assertion compared fractional authority coordinates directly with
+integer sprite coordinates; the corrected check requires exact path settlement and less
+than one pixel of raster rounding. Raw frames/logs remain outside the repository.
 
 ## Effects and damage numbers are a client-owned queue
 
@@ -365,10 +514,10 @@ Rotation is assigned at `00506142` inside `00505900` from the master clock
 5. Never gate an animation on packet arrival; every native animation samples the master
    clock. Damage numbers are scheduled ahead by an explicit per-line delay and expire after
    a fixed lifetime.
-6. Implemented. [Online movement](movement-parity.md#remote-motion) now buffers remote
-   publications, interpolates them with a Hermite that uses position and velocity, carries
-   its playout clock across packets, bounds extrapolation and coasts to rest, and reconciles
-   by rate-limited chase rather than by snapping. The local player's own reconciliation in
+6. Implemented. [Online movement](movement-parity.md#remote-motion) buffers remote
+   paths, carries their partial duration across packets, replays native Hermite samples,
+   holds a dry path and catches up at 32 ms per step above the player backlog threshold.
+   The local player's own reconciliation in
    [prediction.js](../client/src/online/prediction.js) absorbs sub-pixel error, eases larger
    error with a smoothstep window capped at walk speed, and presents only a disagreement
    beyond the band outright.
@@ -386,13 +535,14 @@ Rotation is assigned at `00506142` inside `00505900` from the master clock
 
 | Native mechanism                        | Browser implementation                                                                    |
 | --------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Move packet `0xb6` sample list          | un-acked `peers` frame, one changed peer sample per 30 ms tick ([peer-move-path.txt](ghidra-physics-motion/peer-move-path.txt)) |
-| Carry-over replay clock (`SetMovePath`) | `remote-motion.js` buffer keyed on arrival time; never reset by a packet                  |
-| Hermite with velocity (`0068b108`)      | `RemoteMotion.hermite`, plus `clampContact` to the landed sample's foothold surface        |
-| Fixed 30/32 ms step                     | `PROTOCOL.TICK_MS`; playout slewed from the measured sample cadence                        |
-| Hold at end of path (`0068adcc`)        | bounded forecast then exponential coast to rest                                           |
-| Snap only on relocation (`0068b492`)    | `HARD_SNAP_PX` presentation plus generation reset                                         |
-| Local input edge (`0094a144`)           | unchanged; `OnlinePrediction` + `LocalCombat`                                             |
+| Player move packet `0xb9` path          | unacknowledged `peers` entries with source tick, duration and move type |
+| Carry-over replay clock (`SetMovePath`) | `RemotePlayerPath` appends without resetting its partial-element time |
+| Hermite with velocity (`0068b108`)      | `interpolateMovePath` preserves both recovered velocity weights |
+| Fixed 30/32 ms step                     | Player backlog threshold 550 ms; large-backlog recovery at 5550 ms |
+| Hold at end of path (`0068adcc`)        | Hold final position and velocity; no remote-player forecast |
+| Snap on type 3 / excessive backlog     | Set previous/current state to explicit relocation / newest queued endpoint |
+| Between-step drawing (`009b6205`)       | Interpolate on the scheduled quantum, using one local time sample per frame |
+| Local input edge (`0094a144`)           | `OnlinePrediction` + `LocalCombat`; server input validation remains OpenMS policy |
 | Scheduled damage numbers (`0043da05`)   | `CombatPresentation` lifetime and per-line delay                                          |
 | Swept mob receiver (`00664559(...,1)`)  | `SkillAttack.targetBody` unions the current and previous body                             |
 | View-time hit judgement (`00678476`)    | `attackRewindTicks` widens the same sweep over the measured view window                   |
@@ -406,9 +556,8 @@ behind the application-level ack and so is bounded by the **round trip**, not by
 period: at 500 ms ping a peer's published position refreshed only about twice a second and
 every forecast had to bridge a full round trip, which is what produced the floating and the
 brief floor penetration. Publishing the sample stream un-acknowledged, as the native move
-packet was, decouples it from the receipt. A dense per-tick stream converges to the **60 ms**
-playout floor and interpolates between two authentic 30 ms states, so the forecast horizon
-collapses and the landing can be clamped to the sender's own contact.
+packet was, decouples it from the receipt. Player paths now replay their explicit durations
+with no adaptive playout floor or speculative gravity; contact and action follow the replay.
 
 **Implemented, as an OpenMS extension.** A mob's attack on the local player is published as
 the mob's own action, so the swing the defender draws already carries the playout delay on
@@ -448,11 +597,28 @@ kernel, which then owns the resulting trajectory.
   artifacts/ghidra-scratch lag -process Maplestory_UNPACKED.exe -noanalysis -readOnly \
   -scriptPath docs/tools -postScript nativeApiCallers.java /tmp/ticks "GetTickCount,timeGetTime"
 
+# Player sender, render clock, explicit relocation and local/remote dispatch.
+/Users/k/Downloads/ghidra_12.0.4_PUBLIC/support/analyzeHeadless \
+  artifacts/ghidra-scratch lag -process Maplestory_UNPACKED.exe -noanalysis -readOnly \
+  -scriptPath docs/tools -postScript clientFocus.java /tmp/player-motion.txt \
+  009cbefb,009cb992,009cbcbd,0068ab85,0068a828,0068a88d,0068a563,009b6205,00776dda,009b5e7f,009cb96b,00959727,00959797,009724f9,009726ae,009716ed,00971709,004b237c
+
+# Verify x87 arithmetic which abbreviated decompilation loses, and the owner binding.
+objdump -d --start-address=0x9b6259 --stop-address=0x9b641a \
+  ../Maplestory-Client/Maplestory_UNPACKED.exe
+objdump -d --start-address=0x949676 --stop-address=0x949698 \
+  ../Maplestory-Client/Maplestory_UNPACKED.exe
+objdump -d --start-address=0x97f71c --stop-address=0x97f740 \
+  ../Maplestory-Client/Maplestory_UNPACKED.exe
+objdump -d --start-address=0x97fdf8 --stop-address=0x97fe44 \
+  ../Maplestory-Client/Maplestory_UNPACKED.exe
+
 # Decoded original string pool with ids and consumers.
 /Users/k/Downloads/ghidra_12.0.4_PUBLIC/support/analyzeHeadless \
   artifacts/ghidra-scratch lag -process Maplestory_UNPACKED.exe -noanalysis -readOnly \
   -scriptPath docs/tools -postScript clientStrings.java /tmp/strings.txt
 ```
 
-`artifacts/` is ignored storage; the raw exports for this pass are under
-`artifacts/ghidra-lag/`.
+`artifacts/` is ignored storage. Earlier raw exports are under `artifacts/ghidra-lag/`;
+the September 29 follow-up used `/tmp/openms-native-local-ghidra/` and
+`/tmp/openms-native-*.txt` / `.asm`. Generated evidence is not committed.

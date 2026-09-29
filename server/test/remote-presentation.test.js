@@ -89,6 +89,7 @@ test("the un-acked peer move stream validates and carries only sampled motion", 
     simulation: sim,
     actionStartTick: 7,
   });
+  Object.assign(entry, { tick: 4, durationMs: 30, moveType: 0 });
   const frame = {
     v: 1,
     type: "peers",
@@ -106,7 +107,7 @@ test("the un-acked peer move stream validates and carries only sampled motion", 
   // No appearance, inventory or input may ride the un-acked stream.
   expect(decoded.entries[0].appearance).toBeUndefined();
   expect(decoded.entries[0].playerMotion.held).toBeUndefined();
-  expect(JSON.stringify(entry).length).toBeLessThan(320);
+  expect(JSON.stringify(entry).length).toBeLessThan(400);
   // Bounded entry count is enforced by the wire schema, not by hope.
   const oversized = {
     ...frame,
@@ -203,4 +204,87 @@ test("a crowded field bounds the move stream without starving an actor forever",
   }
   // Rotation across the bounded sample window reaches every actor.
   expect(seen.size).toBe(30);
+});
+
+test("crowded publication retains intermediate samples in source tick order", () => {
+  const actors = Array.from({ length: 30 }, (_, i) => movingActor(`p${i}`, 0));
+  const host = Object.create(OnlineWorld.prototype);
+  const field = peerField(actors);
+  const traces = new Map(actors.map((actor) => [actor.id, []]));
+  // Inspect only the recipient p0, plus p1 for p0's path; no duplicate recipients.
+  host.publish = (actor, record) => {
+    for (const sample of record.entries) {
+      if (actor.id !== (sample.id === "p0" ? "p1" : "p0")) continue;
+      traces.get(sample.id).push(sample);
+    }
+  };
+  for (let tick = 1; tick <= 100; tick++) {
+    field.tick = tick;
+    if (tick <= 20) for (const actor of actors) actor.simulation.x = tick * 3;
+    host.publishPeerMotions(field);
+  }
+  for (const trace of traces.values()) {
+    expect(trace.map((e) => e.tick)).toEqual(
+      Array.from({ length: 20 }, (_, i) => i + 1),
+    );
+    expect(trace.map((e) => e.position.x)).toEqual(
+      Array.from({ length: 20 }, (_, i) => (i + 1) * 3),
+    );
+    expect(trace.every((e) => e.durationMs === 30 && e.moveType === 0)).toBe(
+      true,
+    );
+  }
+});
+
+test("teleports discard queued pre-relocation movement and field replacement resets ownership", () => {
+  const a = movingActor("a", 0),
+    b = movingActor("b", 10);
+  const sent = [];
+  const host = Object.create(OnlineWorld.prototype);
+  host.publish = (actor, record) => sent.push({ id: actor.id, record });
+  const field = peerField([a, b]);
+  host.publishPeerMotions(field);
+  a.simulation.x = 5;
+  a.simulation.relocationSequence = 1;
+  field.tick++;
+  sent.length = 0;
+  host.publishPeerMotions(field);
+  expect(sent[0].record.entries[0]).toMatchObject({
+    id: "a",
+    tick: 5,
+    durationMs: 0,
+    moveType: 3,
+    position: { x: 5, y: 0 },
+  });
+  field.epoch = "other";
+  field.tick = 1;
+  sent.length = 0;
+  host.publishPeerMotions(field);
+  expect(sent).toHaveLength(2);
+  expect(sent[0].record.entries[0].moveType).toBe(0);
+});
+
+test("path duration and discontinuity fields reject malformed wire values", () => {
+  const host = Object.create(OnlineWorld.prototype);
+  let frame;
+  host.publish = (_actor, record) => {
+    frame = {
+      v: 1,
+      connectionEpoch: "connection",
+      serverTick: 4,
+      ...record,
+    };
+  };
+  host.publishPeerMotions(
+    peerField([movingActor("a", 0), movingActor("b", 10)]),
+  );
+  expect(decodeServer(JSON.stringify(frame)).entries[0].durationMs).toBe(30);
+  for (const value of [-1, 32768, 1.5]) {
+    frame.entries[0].durationMs = value;
+    const encoded = JSON.stringify(frame);
+    expect(() => decodeServer(encoded)).toThrow("INVALID_MESSAGE");
+  }
+  frame.entries[0].durationMs = 30;
+  frame.entries[0].moveType = 7;
+  expect(() => decodeServer(JSON.stringify(frame))).toThrow("INVALID_MESSAGE");
 });

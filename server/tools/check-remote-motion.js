@@ -27,14 +27,19 @@ async function seed(database) {
 if (import.meta.main) {
   const flags = parseFlags(process.argv.slice(2), {
     output: { type: "string" },
+    scope: { type: "string" },
     baseline: { type: "boolean" },
     help: { type: "boolean" },
   });
   if (flags.help) {
     console.log(
-      "bun server/tools/check-remote-motion.js [--output DIR] [--baseline]\nNative peer walking/jumping and item flight/hover at 500 ms RTT; isolated accounts. Baseline records without repaired-motion assertions.",
+      "bun server/tools/check-remote-motion.js [--output DIR] [--scope all|players] [--baseline]\nNative peer walking/jumping and item flight/hover at 500 ms RTT; isolated accounts. Baseline records without repaired-motion assertions.",
     );
   } else {
+    const scope = flags.scope ?? "all";
+    if (!["all", "players"].includes(scope)) {
+      throw new Error("Unknown remote-motion scope");
+    }
     const output = flags.output ?? "/tmp/openms-remote-motion",
       timings = {};
     const report = await isolatedOnlineCheck({
@@ -43,7 +48,11 @@ if (import.meta.main) {
       timings,
       network: new DelayedTraffic(500),
       run: (options) =>
-        runRemoteMotion({ ...options, baseline: Boolean(flags.baseline) }),
+        runRemoteMotion({
+          ...options,
+          scope,
+          baseline: Boolean(flags.baseline),
+        }),
     });
     report.fixtureTimings = timings;
     await Bun.write(
