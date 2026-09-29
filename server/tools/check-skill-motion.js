@@ -42,12 +42,12 @@ if (import.meta.main) {
   });
   if (flags.help) {
     console.log(
-      "bun server/tools/check-skill-motion.js [--output DIR] [--scope skills|walk|landing] [--round-trip-ms 0..2000] [--baseline]",
+      "bun server/tools/check-skill-motion.js [--output DIR] [--scope skills|walk|landing|response] [--round-trip-ms 0..2000] [--baseline]",
     );
   } else {
     const scope = flags.scope ?? "skills";
     const roundTripMs = Number(flags["round-trip-ms"] ?? 0);
-    if (!["skills", "walk", "landing"].includes(scope)) {
+    if (!["skills", "walk", "landing", "response"].includes(scope)) {
       throw new Error("Unknown motion scope");
     }
     if (

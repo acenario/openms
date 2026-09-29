@@ -102,6 +102,17 @@ For local walking and correction regressions, use `bun server/tools/check-skill-
 
 Use `--scope landing` with the same tool and latency flags for six native jumps, including moving jumps and a 1.5-second airborne traffic stall. It measures the rendered feet against the flat town floor after the normal landing interpolation quantum, requires actual airborne frames, and checks prediction availability and final settlement. `bun test client/test/grounded-presentation.test.js` separately covers connected slopes, unsupported edges, landing interpolation and disposable hit recoil. These contact checks complement the steady walking check; they do not establish every movement skill or map.
 
+Use `--scope response` for native starts, stops, reversal, one held jump and six quick
+jump taps. The bounded probe records actual keyboard-event arrival and rendered frames.
+Every jump must take off within 100 ms, including presses released inside a 30 ms quantum;
+the first jump must start its original sound within 100 ms instead of waiting for a server
+checkpoint. Facing must respond within 70 ms. Ground braking and reversal retain the
+original acceleration: stopping must complete within 220 ms, and directional displacement
+within 240 ms. These are fixture acceptance bounds, not new physics constants. The latest
+sound descriptor identifies only the first cue; deterministic tests separately prove
+silent replay/confirmation and invalid-press suppression. This check measures response,
+not subjective native-client equivalence.
+
 `bun server/tools/check-combat-latency.js --output /tmp/openms-combat-latency` runs native basic attack, Power Strike and Magic Bolt input in isolated fighter/mage contexts at 500 ms RTT, with 1.2-second traffic pauses. It measures first local pose/flight, checks one animation run across confirmation, requires the original action's confirmation, and samples mobs through a separate 450 ms pause. `--baseline` records the older behavior without repaired-behavior assertions. Frame reports and logs stay outside the repository. AI choices are not seeded across runs, so aggregate moving/idle counts are diagnostics, not a matched AI benchmark.
 
 `bun server/tools/check-combat-latency.js --scope hits --output /tmp/openms-hit-feedback` isolates outgoing impact and incoming contact feedback. It logs in a disposable developer fighter, spawns a Stump through the native console, attacks with Control and walks into its drawn body. With 500 ms RTT and separately held replies, it records first local hit pose/contact timestamps and bounded frame samples. This checks presentation before confirmation; deterministic tests separately cover critical eligibility, shared protection timing, recoil confirmation/refusal and multi-line echo ownership.

@@ -134,6 +134,20 @@ window handle `*(DAT_00be7b38 + 4)` against `(*DAT_00bf04e0)()`, reads key state
 `FUN_00451b6a`/`FUN_0059a25a`, then calls `FUN_009b7b4a(dirX, dirY)` and `FUN_009b19d0()`
 to steer the local movement controller. Nothing in this path waits on the network.
 
+**Jump requests and sound (September 29 follow-up).** `0094c383` sets controller
+`+0x168` to one after the local jump eligibility checks. `009b19e5..009b19f4` tests
+that latch and calls `009b2202`, whose jump branch reaches `009b1d3d`. Releasing a
+key before the next physics quantum does not erase the stored request. In the
+accepted ground-jump branch, `009b1d3d` tests owner type zero, decodes string
+`0x8e1` ("Jump") and calls `009899b1` locally. That sound does not wait for the
+completed path to be sent or a server packet to return.
+
+OpenMS's physical input already retained `jumpPressed` through keyup, but its
+online held-input conversion discarded that edge. It now transmits and predicts
+one jump sample for the retained press. Accepted forward prediction cues `Game/Jump`;
+checkpoint restoration, input replay, duplicate confirmations and rejoin remain
+silent. An ineligible airborne/blocked press does not produce a jump sound.
+
 Action dispatch runs on the key edge. `0095bedf` is the function-key/action handler called
 from the key dispatcher `0094c856` (`0094cdf0`) and from `CUserLocal::Update` (`0094bc07`,
 `0094bc65`). It computes the interval since the last accepted action
@@ -602,6 +616,12 @@ kernel, which then owns the resulting trajectory.
   artifacts/ghidra-scratch lag -process Maplestory_UNPACKED.exe -noanalysis -readOnly \
   -scriptPath docs/tools -postScript clientFocus.java /tmp/player-motion.txt \
   009cbefb,009cb992,009cbcbd,0068ab85,0068a828,0068a88d,0068a563,009b6205,00776dda,009b5e7f,009cb96b,00959727,00959797,009724f9,009726ae,009716ed,00971709,004b237c
+
+# Local jump latch, accepted jump and its local sound dispatch.
+/Users/k/Downloads/ghidra_12.0.4_PUBLIC/support/analyzeHeadless \
+  artifacts/ghidra-scratch lag -process Maplestory_UNPACKED.exe -noanalysis -readOnly \
+  -scriptPath docs/tools -postScript clientFocus.java /tmp/jump-response.txt \
+  0094c383,009b19d0,009b2202,009b1d3d
 
 # Verify x87 arithmetic which abbreviated decompilation loses, and the owner binding.
 objdump -d --start-address=0x9b6259 --stop-address=0x9b641a \

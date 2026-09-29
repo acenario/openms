@@ -718,9 +718,8 @@ function startPresentation() {
   window.addEventListener("unhandledrejection", browserRejection, {
     signal: controller.signal,
   });
-  // Poll well inside one 30ms quantum so each step lands close to its tick boundary;
-  // presentation interpolation stretches one quantum per step, so a late step is the
-  // remaining source of uneven presented speed. Still a fixed scheduler, never RAF.
+  // Both this timer and drawing drain the same fixed clock. Poll within a quantum
+  // so input need not wait for a rendered frame; interpolation retains tick phase.
   clock = setInterval(advance, 4);
   demand = setInterval(updateDemand, 200);
   if (inspection) inspectionTimer = setInterval(inspect, 500);

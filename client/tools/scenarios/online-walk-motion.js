@@ -4,6 +4,12 @@ import { assertion, failureDetails, measureStage } from "../native-evidence.js";
 import { onlineIdentity } from "./online-lifecycle.js";
 import { participant, focusGame } from "./online-ui-repairs.js";
 import { login } from "./online-recycling-scrolls.js";
+import {
+  observeInputResponse,
+  exerciseInputResponse,
+  analyzeInputResponse,
+  verifyInputResponse,
+} from "./online-input-response.js";
 
 const CAPACITY = 1600;
 const pause = (ms) =>
@@ -31,6 +37,9 @@ function sampleFrames() {
       kernelY: state.simulation.y,
       previousX: state.simulation.previousX,
       previousY: state.simulation.previousY,
+      facing: state.presentation.facing,
+      jumpSequence: state.simulation.groundJumpSequence,
+      jumpSound: state.audio.lastSound?.source.includes("/Jump") ?? false,
       vx: state.simulation.vx,
       vy: state.simulation.vy,
       state: state.simulation.state,
@@ -140,10 +149,13 @@ export async function runWalkMotion({
     );
     await prepareWalk(page, network, report);
     await page.evaluate(sampleFrames);
+    if (scope === "response") await page.evaluate(observeInputResponse);
     await measureStage(report.timings, "walks", () =>
-      scope === "landing"
-        ? jumps(page, network, report)
-        : walks(page, network, report),
+      scope === "response"
+        ? exerciseInputResponse(page, roundTripMs)
+        : scope === "landing"
+          ? jumps(page, network, report)
+          : walks(page, network, report),
     );
     await collectMotion(page, report, { output, url });
     if (!baseline) verify(report);
@@ -175,6 +187,10 @@ async function collectMotion(page, report, { output, url }) {
       : [];
   report.recovery = recovery(probe.rows);
   report.contact = analyzeContact(probe.rows);
+  if (report.scope === "response") {
+    report.responses = analyzeInputResponse(probe.rows, probe.edges);
+    report.edges = probe.edges;
+  }
   assertion(!probe.overflow, "Movement sampler exhausted");
   assertion(report.errors.length === 0, "Browser errors");
   assertion(
@@ -253,6 +269,7 @@ function analyzeContact(rows) {
 }
 
 function verify(report) {
+  if (report.scope === "response") verifyInputResponse(report.responses);
   for (const walk of report.scope === "walk" ? report.analysis : []) {
     assertion(walk.frames >= 80, "Insufficient steady walking frames");
     assertion(walk.maximumBackstep < 1, "Held walking visibly moves backward");

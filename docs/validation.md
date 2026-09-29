@@ -713,3 +713,58 @@ These are bounded simulated-latency checks, not an original Windows runtime comp
 or a guarantee under arbitrary packet stalls. Beyond retained input history, the server
 can reject expired input and force a correction. The peer wire format changed; rebuild
 and restart client and server together.
+
+## Short-input response and local jump audio (2026-09-29)
+
+Steady walking did not cover quick input or delayed feedback. A separate native-keyboard
+baseline at 2,000 ms RTT missed **five of six 9.5–13.4 ms jump taps**. The physical
+keyboard handler retained `jumpPressed`, but the predictor serialized only `jump`,
+which was already false after keyup. The first held jump's sound started **2051 ms**
+after the press because only a server checkpoint triggered it.
+
+The [native jump trace](native-lag-handling.md#local-character-input-driven-and-immediately-responsive)
+confirms a pending jump latch and local sound dispatch in accepted ground-jump physics.
+The online converter now preserves that pending press for one sample, and forward local
+prediction cues sound when the shared kernel accepts the jump. Checkpoint replay, server
+confirmation, rejoin and invalid presses stay silent. Physics coefficients are unchanged.
+
+The final run passed at the same 2,000 ms RTT:
+
+| Native-input response | Final measurement |
+| --- | --- |
+| Six short jump taps, each held 10–15 ms | All accepted; visible takeoff in 12.5–36.9 ms |
+| First ordinary jump / original sound start | 41.1 / 41.1 ms |
+| Facing after directional input | 4.9–32.4 ms |
+| Movement from rest | 27.9–38.3 ms |
+| Stop after release, retaining native friction | 166.0–178.9 ms |
+| Reversal crosses its key-press position, retaining native inertia | 223.0 ms |
+| Floating / unavailable-prediction / overflow / browser-error frames | 0 |
+| Final presentation/kernel position error | 0 pixels |
+
+```sh
+bun test client/test/sync-alignment.test.js client/test/player-input.test.js \
+  client/test/grounded-presentation.test.js client/test/online-latency.test.js \
+  client/test/local-hit-motion.test.js client/test/divert-alignment.test.js
+bun server/tools/check-skill-motion.js --scope response --round-trip-ms 2000 \
+  --output /tmp/openms-input-response
+```
+
+Both new regressions failed before the repair. The final focused suite passed **63 tests /
+876 assertions**; formatting, lint, the guarded browser build and whitespace checks
+passed. Documentation retains the same 881 pre-existing missing targets, with none added.
+One intermediate browser run timed out on initial navigation before gameplay; its retry
+completed. Generated reports/logs remain outside the repository. No extraction was needed.
+
+Final stage times in milliseconds: content/database 348, account seed 91, server 1150,
+frontend/build 2038, browser acquisition 1242, identity read 4433, login/readiness 37028,
+latency warmup 2501, input exercise 14433, browser/fixture teardown 30/134.
+Final source build: `519498e1c3c9210c78a6bbfb8deafa2e000a437e527a45f2f5af01630f7c46d1`;
+rules: `bcd61f87ae90d9a906a7afb2863f26e6a5df4bcd9067da217451b0409f5a6a9a`.
+Baseline source build: `2f16fec8be9ec78d16fa6bfadc391a9025991b9d1e97838ce7efddf8e1d45dab`;
+rules: `ee6c19e7805a268d870c1aca4c442539c3ac6ab969909552eb9e2f03868d3f99`.
+Both used catalog `bf4d12c856304ed77c55a1296dcd7bf82d11f2bea505e111c517ae1b1e482af4`
+and asset build `11be20f84c507b5d85eba2fbdbd91f06c6b591922b11bad32ad0d02d3a16a939`.
+
+The first-sound metric observes the audio engine's successful start; it is not a new
+lossless audio recording. This fixed workload establishes response to these inputs,
+not subjective native-client equivalence or a synchronized Windows comparison.

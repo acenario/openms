@@ -67,7 +67,6 @@ export class OnlinePrediction {
     this.onGroundJump = onGroundJump;
     this.onMovementLock = onMovementLock;
     this.controlFrame = null;
-    this.groundJumpSequence = null;
     this.simulation = null;
     this.held = createHeldInput();
     this.history = Array.from({ length: PROTOCOL.INPUT_HISTORY }, historyEntry);
@@ -158,7 +157,6 @@ export class OnlinePrediction {
     this.interpolate(this.lastObservedAt, this.correctionPose);
     this.ready = true;
     this.controlFrame = message;
-    this.observeJump(message.motion.groundJumpSequence);
     if (message.authoritative) this.hitPreview?.clear();
     // Consume visual confirmations first; the checkpoint already contains these forces.
     this.applyDiverts(message.diverts);
@@ -387,15 +385,6 @@ export class OnlinePrediction {
     }
   }
 
-  /** Only new server-accepted ground/drop jumps cue audio; replay and rejoin are silent. */
-  observeJump(sequence) {
-    const previous = this.groundJumpSequence;
-    this.groundJumpSequence = sequence;
-    if (previous === null) return;
-    const delta = (sequence - previous) >>> 0;
-    if (delta > 0 && delta < 0x80000000) this.onGroundJump?.();
-  }
-
   /** A forced relocation replaces the kernel and retires pre-transition prediction. */
   relocate(x, y) {
     const sim = this.simulation;
@@ -595,7 +584,12 @@ export class OnlinePrediction {
     entry.attack = sample.attack;
     entry.movementLocked = this.simulation.movementLocked;
     assignHeldInput(this.held, sample);
+    const previousJump = this.simulation.groundJumpSequence;
     stepMotion(this.simulation, this.held);
+    // Native 009b1d3d cues Jump on local acceptance. Checkpoint replay is silent.
+    if (this.simulation.groundJumpSequence !== previousJump) {
+      this.onGroundJump?.();
+    }
     this.hitPreview?.step(this.held);
     this.recordPose(entry);
     if (this.simulation.state === "ground") this.flashUsed = false;
@@ -615,7 +609,9 @@ export class OnlinePrediction {
     target.horizontal =
       Number(Boolean(held.right)) - Number(Boolean(held.left));
     target.vertical = Number(Boolean(held.down)) - Number(Boolean(held.up));
-    target.jump = Boolean(held.jump);
+    // 0094c383 latches a jump request until the next movement step. Keyup must
+    // not erase a physical press that happened entirely between two quanta.
+    target.jump = Boolean(held.jump || held.jumpPressed);
     target.attack = Boolean(held.attack);
   }
 
@@ -657,7 +653,6 @@ export class OnlinePrediction {
   clear() {
     this.hitPreview?.clear();
     this.controlFrame = null;
-    this.groundJumpSequence = null;
     this.ready = false;
     this.paused = false;
     this.simulation = null;

@@ -516,7 +516,76 @@ test("a paused portal transition keeps drawing the local player from its own pre
   expect(view.drawY).toBe(30);
 });
 
-test("ground jump audio follows accepted checkpoints once; air presses and rejoin are silent", () => {
+test("a jump released between scheduler steps still reaches local and server input", () => {
+  const { prediction, simulation, clock } = presentable();
+  let transmitted = null;
+  prediction.onInput = (sample) => {
+    transmitted = structuredClone(sample);
+    return 2;
+  };
+  const held = createHeldInput();
+  held.jumpPressed = true;
+  prediction.advance(clock + 30, held);
+  expect(transmitted.jump).toBe(true);
+  expect(simulation.groundJumpSequence).toBe(1);
+  expect(simulation.vy).toBeLessThan(0);
+  held.jumpPressed = false;
+  prediction.advance(clock + 60, held);
+  expect(transmitted.jump).toBe(false);
+});
+
+test("a local ground jump cues sound before any checkpoint, with silent replay and echo", () => {
+  let sounds = 0;
+  const { prediction, simulation, clock } = presentable(() => sounds++);
+  const beforeJump = captureMotion(simulation);
+  const previousTick = prediction.predictedTick;
+  const held = createHeldInput();
+  held.jump = true;
+  prediction.advance(clock + 30, held);
+  expect(simulation.groundJumpSequence).toBe(1);
+  expect(sounds).toBe(1);
+  const afterJump = captureMotion(simulation);
+  function checkpoint(tick, motion) {
+    prediction.observe({
+      connectionEpoch: "epoch",
+      fieldEpoch: "field",
+      serverTick: tick,
+      ackInputSeq: 1,
+      paused: false,
+      motion,
+    });
+  }
+  checkpoint(previousTick, beforeJump);
+  checkpoint(previousTick, beforeJump);
+  expect(sounds).toBe(1);
+  checkpoint(previousTick + 1, afterJump);
+  checkpoint(previousTick + 1, afterJump);
+  expect(sounds).toBe(1);
+});
+
+test("only locally accepted jumps cue sound, including sequence wrap", () => {
+  let sounds = 0;
+  const { prediction, simulation, clock } = presentable(() => sounds++);
+  const held = createHeldInput();
+  held.jump = true;
+  simulation.fieldLimit = 1;
+  prediction.advance(clock + 30, held);
+  expect(simulation.state).toBe("ground");
+  expect(sounds).toBe(0);
+  simulation.fieldLimit = 0;
+  simulation.groundJumpSequence = 0xffffffff;
+  prediction.advance(clock + 60, held);
+  expect(simulation.groundJumpSequence).toBe(0);
+  expect(sounds).toBe(1);
+  held.jump = false;
+  prediction.advance(clock + 90, held);
+  held.jump = true;
+  prediction.advance(clock + 120, held);
+  expect(simulation.state).toBe("air");
+  expect(sounds).toBe(1);
+});
+
+test("checkpoint jumps, sequence wrap and rejoin never emit delayed jump audio", () => {
   let sounds = 0;
   const { prediction, simulation } = presentable(() => sounds++);
   const source = createSimulation(world(), { x: 0, y: 0 });
@@ -543,7 +612,7 @@ test("ground jump audio follows accepted checkpoints once; air presses and rejoi
   expect(source.groundJumpSequence).toBe(1);
   observe();
   observe();
-  expect(sounds).toBe(1);
+  expect(sounds).toBe(0);
   assignHeldInput(input, {
     horizontal: 1,
     vertical: 0,
@@ -559,16 +628,16 @@ test("ground jump audio follows accepted checkpoints once; air presses and rejoi
   });
   stepMotion(source, input);
   observe();
-  expect(sounds).toBe(1);
+  expect(sounds).toBe(0);
   prediction.install(simulation, tick);
   observe();
-  expect(sounds).toBe(1);
+  expect(sounds).toBe(0);
   source.groundJumpSequence = 0xffffffff;
   prediction.install(simulation, tick);
   observe();
   source.groundJumpSequence = 0;
   observe();
-  expect(sounds).toBe(2);
+  expect(sounds).toBe(0);
 });
 
 test("prediction covers network delay within a bounded history horizon", () => {
