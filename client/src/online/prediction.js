@@ -1,3 +1,4 @@
+import { applyMovementSettings } from "../../../shared/movement-settings.js";
 import { PROTOCOL } from "../../../shared/protocol.js";
 import {
   restoreMotion,
@@ -11,12 +12,11 @@ import {
   relocateSimulation,
 } from "../physics/simulation.js";
 import { FLASH_SKILLS } from "../skills/skill-world-rules.js";
-import { inputTargetTick } from "./input-timing.js";
 import { constrainGroundPresentation } from "./prediction-contact.js";
 
 const STALE_OBSERVATION_MS = 5000;
-/** Ease even small disagreements: repeatedly snapping a few pixels is visible jitter.
- * Ordinary correction speed is bounded; field discontinuities still snap explicitly. */
+/** Explicit preview/reposition presentation only; ordinary acknowledgements never
+ * create an offset. Field discontinuities still snap explicitly. */
 const CORRECTION_EPSILON_PX = 0.001;
 const MIN_CORRECTION_MS = 120;
 const MAX_CORRECTION_MS = 600;
@@ -58,8 +58,8 @@ function historyEntry() {
   };
 }
 
-/** Disposable input prediction. Every server checkpoint restores trusted simulation;
- * the unconfirmed input suffix is replayed without sending or presenting new effects. */
+/** Local movement owns its clock and trajectory. Ordinary server frames acknowledge
+ * validated steps; only a new movement epoch or explicit server control replaces it. */
 export class OnlinePrediction {
   constructor({ onInput, onResync, onGroundJump, onMovementLock } = {}) {
     this.onInput = onInput;
@@ -72,6 +72,10 @@ export class OnlinePrediction {
     this.history = Array.from({ length: PROTOCOL.INPUT_HISTORY }, historyEntry);
     this.sample = {
       targetTick: 0,
+      motionEpoch: 0,
+      motionConfig: 0,
+      movementLocked: false,
+      impulses: [],
       horizontal: 0,
       vertical: 0,
       jump: false,
@@ -88,6 +92,8 @@ export class OnlinePrediction {
     this.connectionEpoch = null;
     this.fieldEpoch = null;
     this.ackInputSeq = 0;
+    this.motionEpoch = null;
+    this.motionConfig = null;
     this.corrections = 0;
     this.maximumPositionError = 0;
     this.lastPositionError = 0;
@@ -136,44 +142,46 @@ export class OnlinePrediction {
     }
   }
 
-  /** Rebase on every checkpoint. `authoritative` additionally marks a forced relocation. */
+  /** Ordinary acknowledgements never restore, replay or offset the local trajectory. */
   observe(message) {
-    if (!this.simulation) return;
-    if (!this.acceptObserved(message)) return;
+    if (!this.simulation || !this.acceptObserved(message)) return;
     this.measure(message);
+    const reset = !this.ready || this.motionEpoch !== message.motionEpoch;
     this.connectionEpoch = message.connectionEpoch;
     this.fieldEpoch = message.fieldEpoch;
     this.serverTick = message.serverTick;
     this.lastObservedAt = performance.now();
     this.ackInputSeq = message.ackInputSeq ?? this.ackInputSeq;
+    if (this.paused && !message.paused) this.lastStepAt = this.lastObservedAt;
     this.paused = message.paused;
-    const wasReady = this.ready;
-    const visibleX = this.simulation.x;
-    const visibleY = this.simulation.y;
-    const previousX = this.simulation.previousX;
-    const previousY = this.simulation.previousY;
-    // Reconciliation can run between rendered frames. Preserve the pose at this
-    // instant, including an existing correction, rather than the previous frame.
-    this.interpolate(this.lastObservedAt, this.correctionPose);
-    this.ready = true;
     this.controlFrame = message;
-    if (message.authoritative) this.hitPreview?.clear();
-    // Consume visual confirmations first; the checkpoint already contains these forces.
-    this.applyDiverts(message.diverts);
-    if (message.authoritative) this.pendingImpulses.length = 0;
-    this.adoptCheckpoint(message, message.motion);
-    if (
-      wasReady &&
-      Math.hypot(
-        visibleX - this.simulation.x,
-        visibleY - this.simulation.y,
-        previousX - this.simulation.previousX,
-        previousY - this.simulation.previousY,
-      ) > 0.001
-    ) {
-      this.corrections++;
-      this.reconcilePresentation(visibleX, visibleY, message.authoritative);
+    if (reset || message.authoritative) this.resetMovement(message);
+    else {
+      this.retireHistory();
+      this.applyDiverts(message.diverts);
+      if (message.motionConfig !== this.motionConfig) {
+        applyMovementSettings(this.simulation, message.motion);
+        this.motionConfig = message.motionConfig;
+      }
     }
+    this.ready = true;
+  }
+
+  /** A field/connection reset or a real server-owned action establishes a new path. */
+  resetMovement(message) {
+    this.hitPreview?.clear();
+    this.pendingImpulses.length = 0;
+    this.sample.impulses.length = 0;
+    restoreMotion(this.simulation, message.motion);
+    assignHeldInput(this.held, message.motion.held);
+    this.held.jumpPressed = false;
+    this.held.attackPressed = false;
+    this.motionEpoch = message.motionEpoch;
+    this.motionConfig = message.motionConfig;
+    this.predictedTick = message.motionTick;
+    this.head = this.count = 0;
+    this.lastStepAt = this.lastObservedAt;
+    this.clearCorrection();
   }
 
   /** Reject a checkpoint from a retired connection or field, or an old tick. */
@@ -196,22 +204,6 @@ export class OnlinePrediction {
     return true;
   }
 
-  /** Adopt one authoritative checkpoint wholesale and replay the retained suffix. */
-  adoptCheckpoint(message, motion) {
-    restoreMotion(this.simulation, motion);
-    assignHeldInput(this.held, motion.held);
-    this.held.jumpPressed = false;
-    this.held.attackPressed = false;
-    this.retireHistory();
-    this.predictedTick = message.serverTick;
-    this.replayImpulses(message.serverTick, true);
-    if (this.paused) {
-      this.head = 0;
-      this.count = 0;
-      this.catchUpDebt = 0;
-    } else this.replay();
-  }
-
   /** Merge every announced impulse into the client's own current kernel state. A skill
    *  the client already predicted optimistically is retired by id and not merged twice. */
   applyDiverts(diverts) {
@@ -219,18 +211,32 @@ export class OnlinePrediction {
     let applied = 0;
     for (const divert of diverts) {
       if (!Number.isFinite(divert.vx) || !Number.isFinite(divert.vy)) continue;
-      if (divert.source === "hit" && this.hitPreview?.confirm(divert)) continue;
+      if (divert.id === null) continue;
+      if (divert.source === "hit") this.hitPreview?.reject(divert.sourceId);
       if (
         divert.source === "skill" &&
         this.retireOptimisticSkill(divert.skillId)
       ) {
         continue;
       }
+      this.queueImpulse(divert);
       this.mergeImpulse(divert.vx, divert.vy);
       applied++;
     }
     this.diverts += applied;
     return applied;
+  }
+
+  queueImpulse(divert) {
+    if (this.sample.impulses.length >= 2) {
+      this.requestResync();
+      return;
+    }
+    this.sample.impulses.push({
+      id: divert.id,
+      source: divert.source,
+      skillId: divert.skillId,
+    });
   }
 
   /** Keep a disposable hit path aligned with additional admitted movement impulses. */
@@ -256,6 +262,7 @@ export class OnlinePrediction {
       impulseUntilTick: this.impulseUntilTick,
       tick: this.predictedTick,
     };
+    this.queueImpulse({ id: null, source: "skill", skillId });
     this.mergeImpulse(action.vx, action.vy);
     this.pendingImpulses.push(token);
     if (FLASH_SKILLS.has(skillId)) this.flashUsed = true;
@@ -270,7 +277,6 @@ export class OnlinePrediction {
   canPredictSkill(skillId) {
     return (
       this.pendingImpulses.length < MAX_PENDING_IMPULSES &&
-      !this.pendingImpulses.some((pending) => pending.skillId === skillId) &&
       !(FLASH_SKILLS.has(skillId) && this.flashUsed) &&
       this.predictedTick >= this.impulseUntilTick
     );
@@ -286,15 +292,14 @@ export class OnlinePrediction {
     this.pendingImpulses.splice(index, 1);
     const visibleX = this.simulation.x;
     const visibleY = this.simulation.y;
-    if (this.controlFrame) {
-      this.adoptCheckpoint(this.controlFrame, this.controlFrame.motion);
-    } else restoreMotion(this.simulation, token.motion);
+    restoreMotion(this.simulation, token.motion);
     this.reconcilePresentation(visibleX, visibleY);
     if (this.hitPreview?.sourceId) {
       this.hitPreview.reject(this.hitPreview.sourceId);
     }
     this.flashUsed = token.flashUsed;
     this.impulseUntilTick = token.impulseUntilTick;
+    this.requestResync();
   }
 
   retireOptimisticSkill(skillId) {
@@ -305,15 +310,6 @@ export class OnlinePrediction {
       }
     }
     return false;
-  }
-
-  /** Reapply only unconfirmed local impulses at their original position in the suffix. */
-  replayImpulses(tick, baseline = false) {
-    for (const token of this.pendingImpulses) {
-      if (baseline ? token.tick <= tick : token.tick === tick) {
-        applyExternalImpulse(this.simulation, token.vx, token.vy);
-      }
-    }
   }
 
   /** Absorb a server-owned reposition in presentation space: the drawn pose stays where
@@ -368,7 +364,7 @@ export class OnlinePrediction {
   measure(message) {
     for (let index = 0; index < this.count; index++) {
       const entry = this.history[(this.head + index) % this.history.length];
-      if (entry.targetTick !== message.serverTick) continue;
+      if (entry.inputSeq !== message.ackInputSeq) continue;
       this.lastPositionError = Math.hypot(
         entry.x - message.motion.x,
         entry.y - message.motion.y,
@@ -401,51 +397,11 @@ export class OnlinePrediction {
   }
 
   retireHistory() {
-    this.retireHistoryTo(this.serverTick);
-  }
-
-  /** Retire every entry at or before `tick`. */
-  retireHistoryTo(tick) {
     for (let count = 0; count < this.history.length && this.count; count++) {
-      const entry = this.history[this.head];
-      if (entry.targetTick > tick) break;
+      if (this.history[this.head].inputSeq > this.ackInputSeq) break;
       this.head = (this.head + 1) % this.history.length;
       this.count--;
     }
-  }
-
-  /** Re-step the retained suffix after one authoritative adoption. */
-  replay(options = null) {
-    const probe = options?.probe ?? null;
-    for (let index = 0; index < this.count; index++) {
-      const entry = this.history[(this.head + index) % this.history.length];
-      if (entry.targetTick !== this.predictedTick + 1) {
-        this.requestResync();
-        return;
-      }
-      if (index > 0) this.replayImpulses(entry.targetTick - 1);
-      if (this.onMovementLock && this.controlFrame) {
-        this.simulation.movementLocked = this.onMovementLock(
-          this.controlFrame,
-          entry.movementLocked,
-        );
-      }
-      assignHeldInput(this.held, entry);
-      stepMotion(this.simulation, this.held);
-      this.recordPose(entry);
-      this.captureProbe(probe, entry);
-      this.predictedTick = entry.targetTick;
-      this.replayedTicks++;
-    }
-  }
-
-  captureProbe(probe, entry) {
-    if (!probe || probe.captured || entry.targetTick !== probe.tick) return;
-    probe.x = this.simulation.x;
-    probe.y = this.simulation.y;
-    probe.vx = this.simulation.vx;
-    probe.vy = this.simulation.vy;
-    probe.captured = true;
   }
 
   /** Admit scheduler work only while the installed simulation has fresh authenticated timing. */
@@ -472,47 +428,26 @@ export class OnlinePrediction {
     return true;
   }
 
-  /** now is the local scheduler clock used only to pace bounded server-tick input hints. */
+  /** now is the local monotonic clock pacing completed 30 ms movement reports. */
   advance(now, held) {
     if (!this.canAdvance(now)) return 0;
-    const timing = this.timingState;
-    this.arrivalTick = Math.max(
-      timing.serverTick,
-      Math.floor(
-        (now + timing.oneWayMs + timing.tickOffsetMs) / PROTOCOL.TICK_MS,
-      ),
-    );
-    // The local clock paces presentation; the authenticated field tick only bounds how
-    // far a sample may lead the input window. A briefly late server tick therefore
-    // stretches the lead instead of freezing the player mid-step.
-    const desired = inputTargetTick(timing, now);
+    const due = Math.floor((now - this.lastStepAt) / PROTOCOL.TICK_MS);
     let steps = 0;
-    for (
-      ;
-      steps < PROTOCOL.MAX_CATCH_UP && this.predictedTick < desired;
-      steps++
-    ) {
+    for (; steps < Math.min(PROTOCOL.MAX_CATCH_UP, due); steps++) {
       if (this.count >= this.history.length) {
         this.requestResync();
         break;
       }
-      if (!this.predict(held, this.predictedTick + 1 === desired)) break;
+      if (!this.predict(held, true)) break;
+      this.lastStepAt += PROTOCOL.TICK_MS;
     }
-    if (steps) {
-      // Keep the fractional part of the scheduled quantum. A late timer wake-up
-      // must not restart interpolation and vary a constant walk's drawn speed.
-      this.lastStepAt =
-        (this.predictedTick - PROTOCOL.INPUT_BUFFER_TICKS) * PROTOCOL.TICK_MS -
-        timing.oneWayMs -
-        timing.tickOffsetMs;
-    }
-    this.catchUpDebt = Math.max(0, desired - this.predictedTick);
+    this.catchUpDebt = Math.max(0, due - steps);
     return steps;
   }
 
-  /** Browser presentation of the newest two authenticated 30 ms kernel states.
+  /** Browser presentation of the newest two locally integrated 30 ms kernel states.
    * The scheduled boundary is the interpolation anchor, preserving the sub-tick
-   * remainder across timer wake-ups. Replay and correction never move that anchor.
+   * remainder across timer wake-ups. Ordinary acknowledgements never move that anchor.
    * @param {number} now Local scheduler time in milliseconds.
    * @param {{x:number,y:number}} target Reused pose scratch; never allocated per frame.
    */
@@ -566,17 +501,11 @@ export class OnlinePrediction {
     const sample = this.sample;
     sample.targetTick = this.predictedTick + 1;
     this.copyInput(sample, transmit ? held : this.held);
-    // The state this sample extends, at the end of targetTick - 1: the server compares
-    // it with its own simulation for the same tick before stepping. -0 is not a legal
-    // wire scalar, so it is normalized here rather than rejected at encode time.
-    this.copyMotion(sample.motion);
-    const inputSeq = (transmit ? this.onInput?.(sample) : 0) ?? 0;
-    if (!Number.isSafeInteger(inputSeq) || inputSeq < 0) {
-      throw new Error("Input sender must return admitted sequence");
-    }
+    sample.motionEpoch = this.motionEpoch;
+    sample.motionConfig = this.motionConfig;
     this.applyLocalControls(transmit);
+    sample.movementLocked = this.simulation.movementLocked;
     const entry = this.history[(this.head + this.count) % this.history.length];
-    entry.inputSeq = inputSeq;
     entry.targetTick = sample.targetTick;
     entry.horizontal = sample.horizontal;
     entry.vertical = sample.vertical;
@@ -591,6 +520,13 @@ export class OnlinePrediction {
       this.onGroundJump?.();
     }
     this.hitPreview?.step(this.held);
+    this.copyMotion(sample.motion);
+    const inputSeq = this.onInput?.(sample) ?? 0;
+    if (!Number.isSafeInteger(inputSeq) || inputSeq < 0) {
+      throw new Error("Input sender must return admitted sequence");
+    }
+    entry.inputSeq = inputSeq;
+    sample.impulses.length = 0;
     this.recordPose(entry);
     if (this.simulation.state === "ground") this.flashUsed = false;
     this.count++;
@@ -627,7 +563,7 @@ export class OnlinePrediction {
     return motion;
   }
 
-  /** Bounded local prediction for diagnostics; never a server rule input. */
+  /** Completed local endpoint; server reproduction validates it before world admission. */
   copyMotion(target) {
     const sim = this.simulation;
     target.x = normalizeZero(sim.x);
@@ -661,6 +597,7 @@ export class OnlinePrediction {
     this.connectionEpoch = null;
     this.fieldEpoch = null;
     this.ackInputSeq = 0;
+    this.motionEpoch = null;
     this.catchUpDebt = 0;
     this.lastStepAt = 0;
     this.pendingImpulses.length = 0;
@@ -676,6 +613,7 @@ export class OnlinePrediction {
 
   snapshot() {
     return Object.freeze({
+      motionEpoch: this.motionEpoch,
       ready: this.ready,
       paused: this.paused,
       serverTick: this.serverTick,

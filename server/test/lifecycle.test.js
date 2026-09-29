@@ -54,13 +54,25 @@ function fixture() {
       mp: 20,
       equipment: [],
     },
-    simulation: { x: 0, y: 0, vx: 0, vy: 0, facing: 1, action: "stand1" },
+    simulation: fixtureSimulation(),
   };
   field.characters.set(actor.id, actor);
   world.actors.set(actor.id, actor);
   gateway.accounts.set(actor.accountId, actor);
   gateway.characters.set(actor.id, actor);
   return { actor, field, gateway, world, session, persisted, released };
+}
+
+function fixtureSimulation() {
+  return {
+    x: 0,
+    y: 0,
+    vx: 0,
+    vy: 0,
+    facing: 1,
+    action: "stand1",
+    effectiveSettings: { gravityAcc: 2000, gravity: 1, fallSpeed: 670 },
+  };
 }
 
 test("logout removes combat lookup while peer presence remains until its transition settles", async () => {

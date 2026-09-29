@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import { OnlineTransport } from "../src/online/transport.js";
 import { ServerClock } from "../src/online/transport-clock.js";
 import { inputTargetTick } from "../src/online/input-timing.js";
-import { OnlineWorld } from "../../server/src/world.js";
 import { decodeClient, PROTOCOL } from "../../shared/protocol.js";
 
 function baseline() {
@@ -219,38 +218,6 @@ test("a delayed startup baseline cannot leave live high-ping input scheduled in 
   const actualArrivalTick = 112 + 2000 / PROTOCOL.TICK_MS;
   expect(inputTargetTick(clock, 30360)).toBeGreaterThan(actualArrivalTick);
   expect(clock.tickOffsetMs).toBeCloseTo(-26000, 5);
-});
-
-test("input schedules up to two-second RTT with jitter reach the server before their target tick", () => {
-  for (const roundTripMs of [0, 100, 500, 1000, 2000, 2100]) {
-    const clock = new ServerClock();
-    clock.observe({
-      connectionEpoch: "connection",
-      fieldEpoch: "field",
-      serverTick: 100,
-      receivedAt: 30000,
-      roundTripMs,
-      paused: false,
-    });
-    const targetTick = inputTargetTick(clock, 30000);
-    expect(clock.roundTripMs).toBe(roundTripMs);
-    const actor = {
-      state: "active",
-      field: { epoch: "field", tick: clock.arrivalTick(30000) },
-      inputSeq: 0,
-      inputQueue: new Map(),
-    };
-    OnlineWorld.prototype.input.call(
-      { closed: false, overloaded: false },
-      actor,
-      { fieldEpoch: "field", inputSeq: 1, targetTick },
-    );
-    expect(actor.inputQueue.has(targetTick)).toBe(true);
-    expect(targetTick - actor.field.tick).toBeGreaterThan(0);
-    expect(targetTick - actor.field.tick).toBeLessThanOrEqual(
-      PROTOCOL.INPUT_LEAD_TICKS,
-    );
-  }
 });
 
 test("asset failure recovers on the existing socket and stale preparation is cancelled", async () => {

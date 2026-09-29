@@ -4,6 +4,10 @@ function entry() {
   return {
     inputSeq: 0,
     targetTick: 0,
+    motionEpoch: 0,
+    motionConfig: 0,
+    movementLocked: false,
+    impulses: [],
     horizontal: 0,
     vertical: 0,
     jump: false,
@@ -29,6 +33,11 @@ export class InputJournal {
     const next = this.entries[(this.head + this.count) % this.entries.length];
     next.inputSeq = inputSeq;
     next.targetTick = sample.targetTick;
+    next.motionEpoch = sample.motionEpoch;
+    next.motionConfig = sample.motionConfig;
+    next.movementLocked = sample.movementLocked;
+    next.impulses.length = 0;
+    for (const impulse of sample.impulses) next.impulses.push(impulse);
     next.horizontal = sample.horizontal;
     next.vertical = sample.vertical;
     next.jump = sample.jump;

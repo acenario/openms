@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import original from "../../docs/ghidra-physics-motion/wz-globals.json";
+import { movementStreamView } from "../src/movement-stream.js";
 import { OnlineWorld } from "../src/world.js";
 import { prepareActorCombat } from "../src/field-combat.js";
 import { createProfile } from "../../client/src/profile/profile-validation.js";
@@ -61,10 +62,13 @@ function fixture() {
     state: "active",
     profile,
     simulation: standing(),
-    field: { tick: 0, manifest: {}, characters: new Map() },
+    field: { epoch: "parity", tick: 0, manifest: {}, characters: new Map() },
     input: createHeldInput(),
     inputQueue: new Map(),
     lastInputTick: 0,
+    inputSeq: 0,
+    attackEdges: [],
+    receivedAttack: false,
     temporaryStats: effects,
     skills: { effects, derived: () => effects.derived, level: () => 0 },
     skillField: {
@@ -77,6 +81,7 @@ function fixture() {
     content: { items, catalog: { ui: { skills: {} } } },
   });
   prepareActorCombat(world, actor);
+  world.moveActor(actor);
   return {
     world,
     actor,
@@ -97,10 +102,6 @@ function buff(state, values) {
 function advance(state, wire) {
   const { actor, world, offline, input, items, effects } = state;
   actor.field.tick++;
-  actor.inputQueue.set(actor.field.tick, {
-    ...wire,
-    inputSeq: actor.field.tick,
-  });
   world.moveActor(actor);
   updatePlayerMovement(
     offline,
@@ -110,6 +111,18 @@ function advance(state, wire) {
   );
   assignHeldInput(input, wire);
   advanceSimulation(offline, input, 30);
+  const { x, y, vx, vy } = offline;
+  world.input(actor, {
+    ...wire,
+    ...movementStreamView(actor),
+    fieldEpoch: actor.field.epoch,
+    targetTick: actor.movementStream.tick + 1,
+    inputSeq: actor.field.tick,
+    movementLocked: false,
+    impulses: [],
+    motion: { x, y, vx, vy },
+  });
+  world.moveActor(actor);
   for (const key of [
     "x",
     "y",

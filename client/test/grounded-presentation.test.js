@@ -55,15 +55,18 @@ function checkpoint(sim) {
     connectionEpoch: "connection",
     fieldEpoch: "field",
     serverTick: 0,
+    motionEpoch: 1,
+    motionConfig: 1,
+    motionTick: 0,
     ackInputSeq: null,
     paused: false,
     motion: captureMotion(sim),
   };
 }
 
-test("a landed checkpoint cannot leave the drawn character hovering", () => {
+test("an explicit grounded relocation cannot leave the drawn character hovering", () => {
   const { prediction, sim } = fixture();
-  const landed = checkpoint(sim);
+  const landed = { ...checkpoint(sim), authoritative: true };
   detachGround(sim);
   sim.y = sim.previousY = -40;
   prediction.interpolate(performance.now(), {});

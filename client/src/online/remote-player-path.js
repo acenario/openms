@@ -92,7 +92,7 @@ export class RemotePlayerPath {
     this.thresholdMs = Math.trunc((shortPath ? 500 : 1000) * 1.1);
     this.frameDebtMs = 0;
     this.lastAt = now;
-    this.tick = tick;
+    this.tick = entity.playerMotion?.pathTick ?? tick;
     this.backlogSnaps = 0;
     this.capacitySnaps = 0;
     this.streamOwned = false;
@@ -103,7 +103,7 @@ export class RemotePlayerPath {
   reset(entity, tick, now) {
     this.clear();
     this.streamOwned = false;
-    this.tick = tick;
+    this.tick = entity.playerMotion?.pathTick ?? tick;
     this.lastAt = now;
     this.frameDebtMs = 0;
     this.stepMs = QUANTUM_MS;
@@ -122,6 +122,7 @@ export class RemotePlayerPath {
   /** Ordered membership frames seed only; once the move stream owns us they cannot
    * insert a second copy or jump ahead of a path delayed in transit. */
   observe(entity, tick, now) {
+    tick = entity.playerMotion?.pathTick ?? tick;
     if (this.streamOwned || tick <= this.tick) return;
     this.tick = tick;
     this.lastAt = now;

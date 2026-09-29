@@ -5,12 +5,12 @@
 ## Implemented subset
 
 - Server-generated damage and critical flags remain authoritative even when a matching client hit report exists. Ordinary and reconnect motion reports cannot install client positions; the shared server kernel supplies every trusted checkpoint. Optional watchdogs add diagnostics, not movement permission.
-- Every checkpoint rebases local motion and replays retained input silently. A fixed 128-sample outgoing input journal preserves identities through socket backpressure. Prediction no longer waits for transmission or freezes merely because the last observation is delayed; history capacity and the five-second stale limit still bound it.
+- Ordinary movement acknowledgements only retire history; they never restore position or replay local input. See the [current movement contract](client-driven-movement.md). A fixed 128-sample outgoing input journal preserves identities through socket backpressure. Prediction no longer waits for transmission or freezes merely because the last observation is delayed; history capacity and the five-second stale limit still bound it.
 - Basic attack edges wait for the current animation, on both sides, within eight-edge/two-second limits. Server commands wait for participant availability and casts for legal action timing, with bounded queues and fresh lifecycle checks. Release/cancel controls bypass unrelated queued work while preserving ordering with their own cast, including release received before server admission completes.
 - A 200 ms next-skill buffer for non-channel skills starts the selected action when the local animation finishes. Disposable cost reservations use shared skill cost rules and server-published MP/ammunition modifiers; final costs remain server validated. Reservations survive unknown outcomes and are removed only on rejection or receipt plus a covering profile revision.
 - Whole-stack inventory moves can be shown immediately and chained by stable UID. The 32-command/64 KiB client queue sends same-domain writes in receipt order and binds each revision only before its first send. Retry envelopes remain unchanged; refused parents cancel unsent dependents. Previewable actions no longer impose the general native-window pending lock. Splits and economic finalization still await authority.
 
-This first implementation resolves late combat against server state with its existing bounded swept-target tolerance; it adds no historical world rollback. It does **not** add historical movement reconstruction, additional historical PvE hit replay, unlimited disconnected play, wire-level queued acknowledgements, command pipelining, or optimistic trade/reward finalization. Under a long upstream stall, movement may be corrected and expired actions refused. Same-domain command throughput is still receipt-bound even though local presentation continues. Local damage digits remain provisional presentation; authoritative HP and rewards follow server rolls.
+This first implementation resolves late combat against server state with its existing bounded swept-target tolerance; it adds no historical world rollback. Movement now validates the ordered local path through bounded stalls. It does **not** add historical PvE world rollback, unlimited disconnected play, command pipelining, or optimistic trade/reward finalization. Exhausting movement history requests explicit recovery; expired actions can still be refused. Same-domain command throughput is still receipt-bound even though local presentation continues. Local damage digits remain provisional presentation; authoritative HP and rewards follow server rolls.
 
 The later design sections remain a roadmap where they exceed this subset. [Measured validation](validation.md#optimistic-client-and-queued-actions) records the 122 focused tests and native 500 ms RTT queue/reconnect check. Inspection hashes at the end identify the original findings, not the implemented build.
 
@@ -20,9 +20,9 @@ Grounded presentation also constrains corrections to connected supporting surfac
 
 ## Recommendation
 
-Make local input immediately visible, keep a bounded journal of unconfirmed intentions, and rebuild the predicted view from server state plus the remaining intentions whenever confirmation arrives. The server must independently validate every consequential action before it affects anyone's authoritative state. Corrections can be occasional; validation cannot be occasional.
+Make local input immediately visible and keep a bounded journal of unconfirmed intentions. Ordinary movement confirmation only retires history; position is not rebuilt on arrival. The server must independently validate every consequential action before it affects anyone's authoritative state. Corrections can be occasional; validation cannot be occasional.
 
-For OpenMS, combine local movement replay, predicted combat presentation and resource reservations, and a separate queue of discrete actions. Keep the existing authoritative field owner, 30 ms kernel, WebSocket connection and transactional economy. Extend their interfaces rather than introducing a second gameplay authority or a new transport first.
+For OpenMS, combine validated local movement, predicted combat presentation and resource reservations, and a separate queue of discrete actions. Keep the existing authoritative field owner, 30 ms kernel, WebSocket connection and transactional economy. Extend their interfaces rather than introducing a second gameplay authority or a new transport first.
 
 The achievable promise is **immediate controls and continued local play through ordinary latency and short interruptions**. It cannot be unconditional acceptance of everything done offline: another player can take a drop, a target can die, or the server can kill the character during the gap. Those conflicts require correction or rejection. No protocol can distinguish genuinely delayed input from input deliberately withheld by a modified client with certainty.
 
@@ -72,15 +72,16 @@ The proposed boundary is stronger: server simulation establishes legal movement 
 
 ### 1. Movement history
 
-Record input quanta and edge events with local identities immediately, before transport admission. Predict from the latest confirmed continuation state using the same movement kernel. Retain the unconfirmed suffix in a fixed-size ring. Transport batches from this history without assigning a new gameplay identity on retry.
+The implemented [movement contract](client-driven-movement.md) reports every completed
+local 30 ms quantum, retains its identity across backpressure and validates it against
+trusted continuation, terrain, server elapsed time, ability versions and one-use force
+grants. The authority waits for the path instead of independently advancing it and later
+correcting the client. Ordinary acknowledgements retire history without rollback or replay.
 
-The server reproduces legal input from its own trusted state. Client positions can be diagnostic hints; they cannot replace that state. Enforce server-measured elapsed-time budgets, movement coefficients, collision geometry, statuses, impulses, and field ownership. Neither client timestamps nor a claimed high RTT can create extra simulation time.
-
-On confirmation, install the server checkpoint, retire the resolved input prefix and replay the remaining suffix. Reconcile simulation immediately, then ease the rendered offset where appropriate. Death, field replacement and invalid geometry need explicit discontinuity handling. Never replay sounds, emit commands or grant items during this reconstruction. [Fiedler's explanation](https://gafferongames.com/post/what_every_programmer_needs_to_know_about_game_networking/) provides the underlying correction/replay model.
-
-There is a separate server design decision for **late** movement. Applying an old input at today's tick shifts its timing; simply processing all old quanta after already advancing the same character grants duplicate time. To preserve a short stalled trajectory, a bounded resimulation path needs trusted self checkpoints plus the relevant server-owned impulses, restrictions and world history. It reconstructs a candidate self continuation and validates it without replaying committed damage/rewards or rewinding other players. When that history is unavailable or conflicts with death/travel, correct to the current server state. This is required work, not something the existing 128-entry client ring supplies automatically.
-
-Safe first scope: reliable local prediction and reconciliation under steady high RTT, plus explicit correction after an upstream stall. Preserving whole trajectories through longer stalls is a separate increment with the historical invariants tested first.
+Field/connection replacement, denied movement skills and explicit server-controlled actions
+retain recovery paths. Shared-world combat and transactions are never historically replayed.
+The server rejects invalid movement before granting range-dependent benefits. Both faster
+and slower client clocks are bounded; reconnect cannot erase unreported airborne time.
 
 ### 2. Discrete gameplay intentions
 
@@ -157,7 +158,7 @@ Keep WSS initially. Coalesce only unsent replaceable state, preserve edge order 
 1. **Enforce the intended authority boundary.** Stop using reported damage/criticals as final values. Establish input-derived movement validation and correction, including resume; keep heuristic telemetry supplementary. Add narrow tests showing forged values cannot change outcomes.
 2. **Prove one responsive combat sequence.** Give local input an identity before sending, add the bounded next-action buffer and MP/cooldown reservations, and make late basic attack/cast outcomes explicit. Preserve server writer ownership while queueing short contention. Demonstrate two consecutive casts at 500 ms RTT without waiting for the first reply, and without overspending or duplicate feedback.
 3. **Prove one durable UI sequence.** Predict a sequence of inventory moves with stable UIDs and ordered domain revisions. Demonstrate native input → committed transaction → second recipient's state → reconnect-restored state. Include a committed operation whose reply was lost.
-4. **Extend gap tolerance deliberately.** Add validated historical self-movement replay, then consider a bounded PvE hit-history experiment only if current-state resolution feels inadequate. Reuse the same operation/dependency model for potion, pickup and equip; keep trade, reward and travel finalization authoritative.
+4. **Extend gap tolerance deliberately.** Ordered self-movement validation is implemented. Consider a bounded PvE hit-history experiment only if current-state resolution feels inadequate. Reuse the same operation/dependency model for potion, pickup and equip; keep trade, reward and travel finalization authoritative.
 
 Each step is a small independently reviewable batch. An initial combat slice is not proof that every gameplay domain or a full multi-second offline encounter is supported.
 

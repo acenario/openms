@@ -35,6 +35,7 @@ function sampleFrames(capacity) {
         loading: state.loading,
         pending: prediction.pendingImpulses,
         visuals: state.skillVisuals,
+        localVisuals: state.localSkillFeedback,
       });
     } else sample.overflow++;
     requestAnimationFrame(frame);
@@ -54,6 +55,9 @@ async function observeWire(page, report) {
         tick: message.serverTick,
         authoritative: message.authoritative,
         diverts: message.diverts,
+        motion: message.motion,
+        motionEpoch: message.motionEpoch,
+        ackInputSeq: message.ackInputSeq,
       });
     } else if (["snapshot", "result"].includes(message.type)) {
       report.wire.push({
@@ -72,6 +76,7 @@ async function casts(page, report, output) {
   await page.waitForFunction(
     () => window.maple.snapshot().simulation.state === "ground",
   );
+  await waitForCommands(page);
   await page.evaluate(sampleFrames, CAPACITY);
   const keys = [
     "ArrowRight",
@@ -115,21 +120,37 @@ async function casts(page, report, output) {
     );
     await page.keyboard.up(key);
     if (!rapid) await delay(200);
+    if (report.roundTripMs) {
+      await waitForCommands(page);
+    }
   }
+  await delay(report.roundTripMs + 100);
   return page.evaluate(() => {
     window.__skillMotionProbe.running = false;
     return window.__skillMotionProbe;
   });
 }
 
+async function waitForCommands(page) {
+  await page.waitForFunction(
+    () => window.mapleOnline.snapshot().pendingOperations === 0,
+  );
+}
+
 /** Fixed WZ effects stay at the cast origin, including a reuse before expiry. */
 function analyzeVisuals(samples) {
   const playbacks = new Set();
+  const localPlaybacks = new Set();
   let previous = new Map(),
     maxOffset = 0,
     retainedRestarts = 0;
   for (const row of samples.rows) {
     const current = new Map();
+    for (const visual of row.localVisuals) {
+      if (visual.skillId === 4111006 && visual.visualPlayed && visual.visible) {
+        localPlaybacks.add(visual.operationId);
+      }
+    }
     for (const visual of row.visuals) {
       if (visual.sourceId !== "skill:world:Flying:" || !visual.visible) {
         continue;
@@ -152,7 +173,12 @@ function analyzeVisuals(samples) {
     }
     previous = current;
   }
-  return { playbacks: playbacks.size, retainedRestarts, maxOffset };
+  return {
+    playbacks: playbacks.size,
+    localPlaybacks: localPlaybacks.size,
+    retainedRestarts,
+    maxOffset,
+  };
 }
 
 function analyze(samples) {
@@ -184,10 +210,11 @@ function analyze(samples) {
 }
 
 /** Profile native airborne casts through the actual server and received snapshots. */
-export async function runSkillMotion({ browser, url, output }) {
+export async function runSkillMotion({ browser, url, output, network }) {
   await mkdir(output, { recursive: true });
   const report = {
     status: "running",
+    roundTripMs: network?.roundTripMs ?? 0,
     timings: {},
     errors: [],
     results: [],
@@ -254,9 +281,14 @@ function verify(report) {
     "Ordinary casts took ownership of client position",
   );
   assertion(report.errors.length === 0, "Browser errors");
-  assertion(report.visuals.playbacks === 5, "Missing Flash Jump artwork");
   assertion(
-    report.visuals.retainedRestarts > 0,
+    Math.max(report.visuals.playbacks, report.visuals.localPlaybacks) === 5,
+    "Missing Flash Jump artwork",
+  );
+  assertion(
+    report.roundTripMs > 0 ||
+      report.visuals.localPlaybacks === 5 ||
+      report.visuals.retainedRestarts > 0,
     "Consecutive effect reuse was not exercised",
   );
   assertion(

@@ -141,7 +141,7 @@ export class LocalCombat {
     }
     if (this.current()) return true;
     if (message.combat?.locked && this.match(message.combat)) return false;
-    return message.motion.movementLocked;
+    return Boolean(message.combat?.locked);
   }
   draw(animation) {
     const record = this.current();

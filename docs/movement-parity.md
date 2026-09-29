@@ -1,6 +1,6 @@
 # Online movement parity
 
-The online client and server use the same original-data movement preparation and **30 ms** simulation step. This repair changes server coefficients without changing the fixed-step clock or adding interpolation to the physics kernel.
+The online client and server use the same original-data movement preparation and **30 ms** simulation step. The local client owns its trajectory; the server validates completed steps before they affect the shared world. See the [current movement contract](client-driven-movement.md).
 
 ## Cause and correction
 
@@ -25,88 +25,53 @@ flowchart TD
   Prepare --> Server[Authoritative 30 ms server step]
   Prepare --> Predictor[Browser 30 ms prediction step]
   Server --> Checkpoint[Server checkpoint]
-  Checkpoint --> Predictor
+  Predictor --> Reports[Completed movement reports]
+  Reports --> Server
+  Checkpoint --> Retire[Retire acknowledged history]
 ```
 
-The browser predicts movement immediately, then restores server checkpoints and replays retained inputs. The server owns consequential positions, including ordinary movement. The shared helper preserves equipment and buff semantics without expanding the set of supported movement controllers.
+The browser moves immediately and ordinary acknowledgements only retire history. The server owns the accepted positions used by shared-world actions. The shared helper preserves equipment and buff semantics without expanding the set of supported movement controllers.
 
 ## Client-owned motion
 
-The client owns immediate presentation. The server owns legal movement. The former client-position-adoption policy was replaced by the [optimistic-client implementation](optimistic-client.md) to preserve the authority boundary while retaining responsive controls.
+The [client-driven movement contract](client-driven-movement.md) supersedes the former
+routine checkpoint restore/replay policy. Local 30 ms stepping and interpolation use only
+local monotonic time. Completed reports remain ordered through delivery stalls; a shared-kernel
+validator reproduces speed, jump/ladder and terrain behavior before accepting their endpoints.
 
-| Contract | Owner | Behavior |
-| --- | --- | --- |
-| Local input | `OnlinePrediction.predict`, outgoing input journal | Fixed 30 ms prediction proceeds before a packet is sent; up to 128 unsent samples retain original input identities. |
-| Motion hints | `inspectReportedMotion`, `World.adoptResumedMotion` | Optional bounded XY/velocity reports are diagnostics. Neither ordinary reports nor reconnect installs client position or velocity. |
-| Checkpoints | `OnlinePrediction.adoptCheckpoint` | Every checkpoint restores trusted continuation and replays the retained suffix silently. Normal corrections are smoothed in presentation space. |
-| Forced movement | `serverOwnsPosition` | The legacy `authoritative` wire flag marks death, transitions, seats and unpredicted movement skills. It additionally retires incompatible local impulses; `false` does not grant client authority. |
-| Impulses | `motion.diverts`, `beginOptimistic` | Local movement skills start immediately. A matching divert retires the preview and replay starts from the checkpoint containing the server impulse. Rejection rebases on the latest trusted checkpoint; a departed-field token cannot restore old motion. |
-| Watchdog | [watchdog.js](../server/src/watchdog.js) | Optional discrepancy evidence/kicks supplement independent movement simulation. Inside-tolerance reports still cannot move the server actor. |
-| Reconnect | Connection epoch plus server checkpoint | Retires the previous input journal and restores current server state; no time or distance is granted for a claimed disconnected trajectory. |
-
-The watchdog remains off by default. `OPENMS_MOTION_WATCHDOG_ENABLED=true` in `.env.server` enables its lag-tolerant evidence policy after restart. This changes diagnostics and kicking, never server authority or reconciliation.
-
-Prediction is bounded by 128 history entries and a five-second stale observation threshold, and stops on disconnect. These are recovery limits, not an offline-play guarantee. A longer upstream stall may lose movement outside the server input window; historical trajectory reconstruction is not implemented. Unpredicted teleport/rush/dash/wings still follow server checkpoints. The shared kernel retains original geometry, movement coefficients and contact rules.
-
-Focused continuation checks:
-
-```sh
-bun test client/test/divert-alignment.test.js server/test/hit-divert-replay.test.js server/test/motion-adoption.test.js
-```
+Ordinary acknowledgements never change local XY, velocity, previous XY, held input or the
+render phase. The server grants elapsed time, ability versions and one-use hit/skill forces.
+Invalid trajectories are rejected; explicit relocation, death, seats, server-controlled
+movement and connection recovery retain authoritative continuations. The optional watchdog
+cannot disable trajectory validation.
 
 ## Latency and input timing
 
-The most recently received server tick is already one network leg old. [Input timing](../client/src/online/input-timing.js) estimates when a sample will reach the server and advances through delayed observations while its 128-sample history and stale-observation limits permit. The server independently admits samples within eight ticks of its **current** field tick. Applying that same eight-tick cap to an old received tick would make ordinary 500 ms RTT traffic arrive too late.
-
-Late or prematurely scheduled samples are acknowledged and retired without disconnecting the session. Brief delivery bursts and outlying heartbeat measurements have separate bounded handling. Active movement observations and impulses continue during same-field artwork refreshes; a long initial load obtains a fresh baseline before enabling input. These are transport policies; the recovered 30 ms physics step and movement coefficients remain unchanged. [Protocol limits](server/protocol.md#slow-connections-and-presentation-recovery) define the bounds, and the [500 ms RTT check](validation.md#slow-network-gameplay-repair) records the exercised workload.
+`targetTick` is a consecutive movement-path index within `motionEpoch`, not an arrival
+estimate or deadline. The field tick remains the clock for world combat and cooldowns.
+Neither RTT nor heartbeat jitter changes local movement speed. Both sides retain a bounded
+128-step history/queue; the server validates at most four steps per field tick using
+server-measured time. Accepted positions may trail the locally displayed character while
+packets are in flight. Range checks and persistence use accepted positions.
 
 ## Optimistic presentation policy
 
-The client follows the standard authoritative-loop model rather than giving either side free
-run: the owning client predicts on the fixed 30 ms timestep, buffers its inputs with sequence
-numbers, and the server acknowledges the last input it processed so unacknowledged inputs can
-be replayed; remote entities are drawn from buffered samples slightly in the past; and every
-durable outcome stays server-owned. The useful rules for this repair were:
-
-- **Predict only what the client owns, and only as presentation.** Predictions never grant
-  damage, HP, loot, rewards or cooldown resets; a hacked client can draw any number it likes
-  and changes nothing.
-- **Make the prediction a replay of the authority's own rules**, so divergence is small and
-  the correction is invisible. Contact damage uses the authority's receiver rectangles and hit
-  window; mob recoil uses the recovered coefficients; a projectile uses the published flight
-  plan; a drop replays the published source/landing plan.
-- **Correct small errors by bending, never by hiding them.** The local player absorbs sub-pixel
-  error and glides larger error at walk speed; a projectile bends onto the authoritative plan.
-  Suppressing a legitimate correction is how a player ends up walking through walls.
-- **Bound everything a client can claim.** The watchdog envelope, the eight-tick input
-  admission window and the server-measured attack rewind all cap what a report can buy, and
-  the rewind is derived from the connection's own measured round trip rather than a claim.
-- **Favour the actor with bounded rewind.** A shot is judged against the target's swept
-  current-and-previous body and the view window the attacker was rendering, capped at 16 ticks,
-  so latency costs accuracy nothing without becoming a range cheat.
-
-References: [Gambetta's client-side prediction series](https://www.gabrielgambetta.com/client-server-game-architecture.html),
-[Colyseus netcode](https://docs.colyseus.io/netcode), and Roblox's
-[server-authority write-up](https://d3fel7ao8ljmgc.cloudfront.net/fr/newsroom/2026/07/creating-responsive-cheat-resistant-games-roblox-server-authority).
+Movement, combat presentation and durable operations have separate ownership. Movement
+reports must reproduce a legal trajectory. Local attack artwork/audio and provisional damage
+can appear immediately, while HP, drops, rewards, resources and cooldowns follow server
+admission. Commands still have their existing bounded queues and receipt ordering.
 
 ## Local movement correction continuity
 
-Ordinary checkpoints still restore the trusted kernel and replay its retained input suffix. Corrections preserve the **interpolated pose at receipt time**, including any correction already in progress; comparing the rendered pose with the newest full kernel position double-counted the between-tick offset and caused visible backward steps. Even sub-three-pixel differences ease instead of snapping repeatedly.
+Routine movement has no correction curve. The original previous/current 30 ms interpolation
+retains its fractional phase across timer wakes, draws after draining due local steps, and
+never writes presented coordinates back into physics. Jump sound is triggered by local
+acceptance, not by an acknowledgement. The earlier correction-smoothing measurements remain
+historical evidence of the replaced implementation.
 
-The [original renderer](native-lag-handling.md#clock-ownership) reads both fixed-step states
-and a fractional render clock. OpenMS now retains the scheduled 30 ms boundary instead of
-restarting interpolation at each timer wake-up. Drawing drains due fixed steps and samples
-the same local time, avoiding an old RAF timestamp paired with a newer simulation state.
-Reconciliation also detects changes to the previous state when current XY happens to agree.
-The server tick estimate acquires its first nine timing samples promptly, then limits normal
-clock-fit drift to 6 ms/s (0.6%); RTT and field changes retain separate rebasing. This bound
-is OpenMS policy, not a recovered native constant. It avoids changing walking speed in
-response to routine packet-arrival jitter without leaving a stale startup baseline in charge
-of live input deadlines.
-
-The ordinary correction curve accounts for smoothstep's peak derivative and limits its added speed to **0.125 px/ms**. Its duration can exceed 600 ms after a delivery gap; it remains bounded by the 192-pixel ordinary correction limit. Explicit server relocations retain their separate 512-pixel/600 ms policy. These are presentation limits: movement validation, server checkpoints and the eight-tick input admission window are unchanged. Small RTT fluctuations preserve the filtered field clock so replaying delayed packets does not restart movement timing. See the [high-latency walking regression check](validation.md#movement-correction-regression-at-high-latency).
-
-Ground contact takes priority over this easing. [Presentation contact](../client/src/online/prediction-contact.js) projects horizontal corrections onto the current floor or a connected slope, with the existing 32-transition bound. An offset cannot bridge an unconnected ledge or wall; it falls back to the uncorrected path. Landing retires the vertical correction and retains only the original one-quantum landing interpolation. The visible hit-recoil simulation owns this constraint while its preview is active, so an airborne recoil is not pinned to the main kernel's floor. No presented coordinates are written back into physics. See the [ground-contact regression check](validation.md#ground-contact-during-correction).
+Explicit denied previews can still use [contact-constrained presentation](../client/src/online/prediction-contact.js).
+That policy cannot alter the accepted world position. See the [browser procedure](validation-method.md#combat-latency-check)
+for bounded high-ping walking, landing and input-response checks.
 
 ## Local combat presentation
 
@@ -122,7 +87,7 @@ Each preview retains its input sequence or skill operation ID. Combat state, mot
 
 **Projectile flight.** A skill's ball reached observers only as acknowledged `position` samples chased over a fixed 90 ms window on a different timeline than the thrower's drawn avatar, so it trailed or led the shooter and stepped between snapshots. The authority's flight slot now publishes its authored plan (`flight: {startX,startY,endX,endY,durationMs,delayMs}` on `skillVisual`), and [native-skill-presentation.js](../client/src/online/native-skill-presentation.js) integrates that straight line locally from the plan on receipt, exactly as the thrower's [LocalProjectiles](../client/src/online/local-projectiles.js) preview and the authority's `startFlight`/`stepFlight` both do. The thrower additionally adopts the authoritative plan when its echo arrives and bends onto it at a bounded rate, so both screens show the same trajectory without restarting the ball or snapping it.
 
-Late movement remains expired. A separate server queue retains at most eight attack **press edges**, up to two seconds old, for current-state combat admission. A press followed by release in one delayed burst is consumed once with its original sequence. It neither replays old motion nor bypasses attack cadence, resource costs or field ownership. Blur/disconnect neutralization and field changes clear this queue.
+Delayed movement is validated in path order. Once its step is accepted, a separate server queue retains the attack **press edge** for up to two seconds, with at most eight queued edges. A press followed by release in one delayed burst is consumed once with its original sequence. Combat uses the current accepted world state and retains attack cadence, resource costs and field ownership. Disconnect neutralization and field changes clear this queue.
 
 ### Local impact feedback
 
@@ -220,6 +185,6 @@ The targeted regressions in `client/test/sync-alignment.test.js` cover accepted 
 bun test server/test/movement-parity.test.js client/test/sync-alignment.test.js client/test/physics.test.js
 ```
 
-The original coefficient repair's retained run passed **33 tests, 795 assertions**. Its regression invokes the real `OnlineWorld.moveActor` path and compares every walking/jumping tick with the shared preparation and integration fixtures. It covers 100%, buff replacement/cancellation, shoe friction/swimming coefficients, anti-slip shoes, riding forms, restricted fields and received checkpoint continuation. Current focused tests cover replay, presentation isolation and motion boundaries; jump/audio regressions extend that coverage.
+The original coefficient repair's retained run passed **33 tests, 795 assertions**. Its regression invokes the real `OnlineWorld.moveActor` path and compares every walking/jumping tick with the shared preparation and integration fixtures. It covers 100%, buff replacement/cancellation, shoe friction/swimming coefficients, anti-slip shoes, riding forms, restricted fields and received checkpoint continuation. Current focused tests cover validated paths without ordinary reconciliation, presentation isolation and motion boundaries; jump/audio regressions extend that coverage.
 
 Geometry and buff inputs are explicit isolating fixtures; original globals are independently decoded. This is executable kernel/server parity proof, not a new Windows capture or a network-latency benchmark. Restart both development commands after this runtime change so rules identities match.

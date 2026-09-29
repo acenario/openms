@@ -7,6 +7,9 @@ import { loadContent } from "../src/content.js";
 import { createSimulation } from "../../client/src/physics/simulation.js";
 import { captureMotion } from "../../shared/motion.js";
 
+const content = await loadContent();
+const physics = (await content.map(content.catalog.defaultMap)).physics;
+
 function fixture() {
   const sent = [];
   const actor = {
@@ -33,7 +36,7 @@ function fixture() {
     actorEntity({
       id: crypto.randomUUID(),
       actionStartTick: 0,
-      simulation: { x: index, y: 0, vx: 0, vy: 0, facing: 1, action: "stand1" },
+      simulation: createSimulation(physics, { x: index, y: 0, facing: 1 }),
       profile: {
         hp: 50,
         name: "界".repeat(32),
@@ -80,11 +83,7 @@ test("published chair seat remains a closed wire record", () => {
     id: crypto.randomUUID(),
     actionStartTick: 0,
     simulation: {
-      x: 10,
-      y: 20,
-      vx: 0,
-      vy: 0,
-      facing: 1,
+      ...createSimulation(physics, { x: 10, y: 20, facing: 1 }),
       action: "sit",
       seat: { id: 3010000, x: 10, y: 20 },
     },
@@ -131,10 +130,8 @@ test("oversized entity deltas fall back before advancing the baseline or sending
   expect(f.socket.data.knownEntities.size).toBe(100);
 });
 
-test("the immediate post-snapshot motion checkpoint is a complete wire record", async () => {
-  const content = await loadContent();
-  const manifest = await content.map(content.catalog.defaultMap);
-  const simulation = createSimulation(manifest.physics, {
+test("the immediate post-snapshot motion checkpoint is a complete wire record", () => {
+  const simulation = createSimulation(physics, {
     x: 0,
     y: 0,
     facing: 1,
@@ -145,6 +142,7 @@ test("the immediate post-snapshot motion checkpoint is a complete wire record", 
     state: "active",
     eventSeq: 0,
     ackInputSeq: 4,
+    inputQueue: new Map(),
     simulation,
     connection: {
       data: { epoch: "connection", closed: false },

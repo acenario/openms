@@ -13,7 +13,7 @@ export class DelayedTraffic {
     }
     this.roundTripMs = roundTripMs;
     this.links = new Map();
-    this.stalledUntil = 0;
+    this.stalledUntil = { up: 0, down: 0 };
     this.httpRequests = 0;
     this.frames = { up: 0, down: 0 };
     this.lastMotion = null;
@@ -34,7 +34,7 @@ export class DelayedTraffic {
       if (this.links.size >= 8) {
         throw new Error("Fixture relay capacity exceeded");
       }
-      pair = { up: link(), down: link() };
+      pair = { up: link("up"), down: link("down") };
       this.links.set(relay, pair);
     }
     const channel = pair[direction];
@@ -57,7 +57,10 @@ export class DelayedTraffic {
 
   schedule(channel) {
     if (channel.timer || !channel.queue.length) return;
-    const at = Math.max(channel.queue[0].at, this.stalledUntil);
+    const at = Math.max(
+      channel.queue[0].at,
+      this.stalledUntil[channel.direction],
+    );
     channel.timer = setTimeout(
       () => this.flush(channel),
       Math.max(0, at - performance.now()),
@@ -68,7 +71,12 @@ export class DelayedTraffic {
     channel.timer = null;
     const now = performance.now();
     for (let count = 0; count < MAX_FRAMES && channel.queue.length; count++) {
-      if (Math.max(channel.queue[0].at, this.stalledUntil) > now) break;
+      if (
+        Math.max(channel.queue[0].at, this.stalledUntil[channel.direction]) >
+        now
+      ) {
+        break;
+      }
       const frame = channel.queue.shift();
       channel.bytes -= frame.bytes;
       frame.send();
@@ -76,7 +84,7 @@ export class DelayedTraffic {
     this.schedule(channel);
   }
 
-  stall(milliseconds) {
+  stall(milliseconds, direction = "both") {
     if (
       !Number.isInteger(milliseconds) ||
       milliseconds < 0 ||
@@ -84,7 +92,12 @@ export class DelayedTraffic {
     ) {
       throw new Error("Fixture stall must be in 0..3000 milliseconds");
     }
-    this.stalledUntil = performance.now() + milliseconds;
+    if (!["both", "up", "down"].includes(direction)) {
+      throw new Error("Unknown traffic direction");
+    }
+    const until = performance.now() + milliseconds;
+    if (direction !== "down") this.stalledUntil.up = until;
+    if (direction !== "up") this.stalledUntil.down = until;
   }
 
   close(relay) {
@@ -99,6 +112,6 @@ export class DelayedTraffic {
   }
 }
 
-function link() {
-  return { queue: [], bytes: 0, timer: null };
+function link(direction) {
+  return { direction, queue: [], bytes: 0, timer: null };
 }

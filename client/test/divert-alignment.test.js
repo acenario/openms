@@ -10,6 +10,7 @@ import {
   assignHeldInput,
   stepMotion,
   captureMotion,
+  restoreMotion,
 } from "../../shared/motion.js";
 
 /** Synthetic isolating geometry, not an original-game recording. Mirrors the
@@ -76,6 +77,9 @@ function predicting(lastTick) {
     connectionEpoch: "epoch",
     fieldEpoch: "field",
     serverTick: 0,
+    motionEpoch: 1,
+    motionConfig: 1,
+    motionTick: 0,
     ackInputSeq: null,
     paused: false,
     motion: captureMotion(simulation),
@@ -95,6 +99,9 @@ function checkpoint(simulation, tick, diverts = [], authoritative = false) {
     connectionEpoch: "epoch",
     fieldEpoch: "field",
     serverTick: tick,
+    motionEpoch: 1,
+    motionConfig: 1,
+    motionTick: tick,
     ackInputSeq: tick,
     paused: false,
     motion: captureMotion(simulation),
@@ -103,15 +110,19 @@ function checkpoint(simulation, tick, diverts = [], authoritative = false) {
   };
 }
 
-test("a reported sample carries the state it extends, bounded and normalized", () => {
+test("a reported sample carries its completed endpoint, bounded and normalized", () => {
   const { prediction, sent } = predicting(3);
   expect(sent).toHaveLength(3);
   for (let tick = 1; tick <= 3; tick++) {
     expect(Object.keys(sent[tick - 1]).sort()).toEqual([
       "attack",
       "horizontal",
+      "impulses",
       "jump",
       "motion",
+      "motionConfig",
+      "motionEpoch",
+      "movementLocked",
       "targetTick",
       "vertical",
     ]);
@@ -122,6 +133,8 @@ test("a reported sample carries the state it extends, bounded and normalized", (
     }
   }
   const current = captureMotion(prediction.simulation);
+  expect(sent.at(-1).motion.x).toBe(current.x);
+  expect(sent.at(-1).motion.y).toBe(current.y);
   expect(prediction.resumeMotion()).toEqual({
     x: current.x,
     y: current.y,
@@ -130,23 +143,17 @@ test("a reported sample carries the state it extends, bounded and normalized", (
   });
 });
 
-test("an ordinary checkpoint corrects the kernel and replays the remaining inputs", () => {
+test("ordinary acknowledgements cannot replace position, inputs or the local clock", () => {
   const { prediction, simulation } = predicting(8);
+  const before = captureMotion(simulation);
   const server = createSimulation(world(), { x: 500, y: -10 });
-  server.effectiveSettings.walkSpeed = 200;
   server.movementLocked = true;
   prediction.observe(checkpoint(server, 4));
-  const held = createHeldInput();
-  for (let tick = 5; tick <= 8; tick++) {
-    assignHeldInput(held, sample(tick));
-    stepMotion(server, held);
-  }
-  expect(captureMotion(simulation)).toEqual(captureMotion(server));
-  expect(simulation.effectiveSettings.walkSpeed).toBe(200);
-  expect(simulation.movementLocked).toBe(true);
-  expect(prediction.snapshot().diverts).toBe(0);
-  expect(prediction.snapshot().corrections).toBe(1);
-  expect(prediction.snapshot().replayedTicks).toBe(4);
+  expect(captureMotion(simulation)).toEqual(before);
+  expect(prediction.predictedTick).toBe(8);
+  expect(prediction.count).toBe(4);
+  expect(prediction.snapshot().corrections).toBe(0);
+  expect(prediction.snapshot().replayedTicks).toBe(0);
 });
 
 test("an authoritative checkpoint replaces the local kernel exactly", () => {
@@ -158,23 +165,21 @@ test("an authoritative checkpoint replaces the local kernel exactly", () => {
   expect(captureMotion(simulation)).toEqual(captureMotion(server));
 });
 
-test("a confirmed knockback is replayed from its checkpoint without applying it twice", () => {
+test("a confirmed knockback merges into the current path without replay or position change", () => {
   const { prediction, simulation } = predicting(8);
-  const server = predicting(4).simulation;
-  applyExternalImpulse(server, 270, -270);
+  const reference = createSimulation(world(), { x: 0, y: -10 });
+  restoreMotion(reference, captureMotion(simulation));
+  const beforeX = simulation.x;
+  applyExternalImpulse(reference, 270, -270);
   prediction.observe(
-    checkpoint(server, 4, [
-      { tick: 4, vx: 270, vy: -270, source: "hit", skillId: 0 },
+    checkpoint(predicting(4).simulation, 4, [
+      { id: 1, tick: 4, vx: 270, vy: -270, source: "hit", skillId: 0 },
     ]),
   );
-  const held = createHeldInput();
-  for (let tick = 5; tick <= 8; tick++) {
-    assignHeldInput(held, sample(tick));
-    stepMotion(server, held);
-  }
-  expect(captureMotion(simulation)).toEqual(captureMotion(server));
+  expect(simulation.x).toBe(beforeX);
+  expect(captureMotion(simulation)).toEqual(captureMotion(reference));
   expect(prediction.snapshot().diverts).toBe(1);
-  expect(prediction.snapshot().corrections).toBe(1);
+  expect(prediction.snapshot().corrections).toBe(0);
 });
 
 test("an optimistic movement skill is applied once and its divert is retired", () => {
@@ -191,7 +196,7 @@ test("an optimistic movement skill is applied once and its divert is retired", (
   const before = { vx: simulation.vx, vy: simulation.vy };
   prediction.observe(
     checkpoint(simulation, 7, [
-      { tick: 7, vx: 350, vy: -250, source: "skill", skillId: 4111006 },
+      { id: 1, tick: 7, vx: 350, vy: -250, source: "skill", skillId: 4111006 },
     ]),
   );
   expect(simulation.vx).toBeCloseTo(before.vx, 8);
@@ -205,7 +210,7 @@ test("a skill divert the client did not predict is merged", () => {
   const { prediction, simulation } = predicting(6);
   prediction.observe(
     checkpoint(simulation, 7, [
-      { tick: 7, vx: -200, vy: -180, source: "skill", skillId: 5201006 },
+      { id: 1, tick: 7, vx: -200, vy: -180, source: "skill", skillId: 5201006 },
     ]),
   );
   expect(prediction.snapshot().diverts).toBe(1);
@@ -224,7 +229,7 @@ test("a refused optimistic cast restores the exact pre-cast checkpoint", () => {
   expect(prediction.snapshot().pendingImpulses).toBe(0);
 });
 
-test("a matching older checkpoint replays silently to the identical current pose", () => {
+test("a matching older acknowledgement retires history and leaves the current pose unchanged", () => {
   const { prediction, simulation, sent } = predicting(8);
   const before = captureMotion(simulation);
   const server = predicting(4).simulation;

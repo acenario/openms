@@ -1,3 +1,6 @@
+import { synchronizeMovementStream } from "./movement-stream.js";
+import { grantMovementImpulse } from "./movement-impulses.js";
+
 /** At most this many external impulses are described in one motion checkpoint.
  *  A tick can carry a mob hit and a movement skill; more than that is a fault. */
 const MAX_DIVERTS_PER_TICK = 2;
@@ -14,7 +17,10 @@ export function recordMotionDivert(actor, simulation, divert) {
   if (!pending || !actor.field || simulation !== actor.simulation) return;
   if (!Number.isFinite(divert.vx) || !Number.isFinite(divert.vy)) return;
   if (pending.entries.length >= MAX_DIVERTS_PER_TICK) return;
+  synchronizeMovementStream(actor);
+  const id = grantMovementImpulse(actor, divert);
   pending.entries.push({
+    id,
     vx: divert.vx,
     vy: divert.vy,
     source: divert.source,
@@ -46,6 +52,7 @@ export function takeMotionDiverts(actor, field) {
       continue;
     }
     published.push({
+      id: entry.id,
       tick: entry.tick + 1,
       vx: entry.vx,
       vy: entry.vy,

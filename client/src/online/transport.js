@@ -12,7 +12,6 @@ import { ServerClock } from "./transport-clock.js";
 import { validStartingStats } from "../../../shared/starting-stats.js";
 import { resource } from "../rendering/stream-validation.js";
 import { sameWorldIdentity } from "../../../shared/world-content.js";
-import { inputTargetTick } from "./input-timing.js";
 import { InputJournal } from "./input-journal.js";
 import { TransportPresentation } from "./transport-presentation.js";
 
@@ -1034,6 +1033,10 @@ export class OnlineTransport {
         (key) =>
           ![
             "targetTick",
+            "motionEpoch",
+            "motionConfig",
+            "movementLocked",
+            "impulses",
             "horizontal",
             "vertical",
             "jump",
@@ -1044,7 +1047,6 @@ export class OnlineTransport {
     ) {
       throw failure("INVALID_INPUT");
     }
-    if (sample.targetTick <= this.lastInputTick) return null;
     if (!Number.isSafeInteger(this.inputSeq + 1)) {
       throw failure("SEQUENCE_EXHAUSTED");
     }
@@ -1090,13 +1092,12 @@ export class OnlineTransport {
   flushInputs() {
     const clock = this.clock;
     if (!this.inputReady(clock)) return;
-    const latest = this.inputWindow(clock);
+    this.inputWindow(clock);
     for (let count = 0; count < INPUT_DRAIN_LIMIT; count++) {
       const sample = this.inputJournal.first();
       if (
         !sample ||
         this.inputTokens < 1 ||
-        sample.targetTick > latest ||
         !this.socket ||
         this.socket.bufferedAmount > SEND_SOFT_BYTES / 2
       ) {
@@ -1106,6 +1107,10 @@ export class OnlineTransport {
         fieldEpoch: this.expectedFieldEpoch,
         inputSeq: sample.inputSeq,
         targetTick: sample.targetTick,
+        motionEpoch: sample.motionEpoch,
+        motionConfig: sample.motionConfig,
+        movementLocked: sample.movementLocked,
+        impulses: sample.impulses,
         horizontal: sample.horizontal,
         vertical: sample.vertical,
         jump: sample.jump,
@@ -1452,26 +1457,9 @@ export class OnlineTransport {
   }
 
   neutral() {
-    if (this.status !== "active") return;
-    if (this.inputSeq === this.lastNeutralInputSeq) return;
-    const arrivalTick = this.clock.arrivalTick(performance.now());
-    if (arrivalTick === null) return;
-    const targetTick = Math.max(
-      inputTargetTick(this.clock, performance.now()),
-      this.lastInputTick + 1,
-    );
-    try {
-      const sequence = this.sendInput({
-        targetTick,
-        horizontal: 0,
-        vertical: 0,
-        jump: false,
-        attack: false,
-      });
-      if (sequence !== null) this.lastNeutralInputSeq = sequence;
-    } catch (error) {
-      this.fail(error);
-    }
+    // Every input now proves a complete local quantum. Visibility/blur clears the
+    // native held state; no synthetic, unstepped packet may consume a path tick.
+    this.callbacks.onClearInput?.();
   }
 
   visibility() {

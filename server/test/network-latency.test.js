@@ -3,7 +3,12 @@ import { GameplayGateway } from "../src/gateway.js";
 import { OnlineWorld } from "../src/world.js";
 import { PROTOCOL } from "../../shared/protocol.js";
 import { ServerClock } from "../../client/src/online/transport-clock.js";
-import { inputTargetTick } from "../../client/src/online/input-timing.js";
+import { loadContent } from "../src/content.js";
+import { createSimulation } from "../../client/src/physics/simulation.js";
+import { createHeldInput } from "../../shared/motion.js";
+import { movementStreamView } from "../src/movement-stream.js";
+const content = await loadContent();
+const physics = (await content.map("100000000")).physics;
 
 function fixture() {
   const session = { id: "session", accountId: "account" };
@@ -18,6 +23,9 @@ function fixture() {
     inputQueue: new Map(),
     attackEdges: [],
     receivedAttack: false,
+    profile: { hp: 100 },
+    input: createHeldInput(),
+    simulation: createSimulation(physics, { x: 80, y: 274 }),
   };
   const world = new OnlineWorld({ content: {}, database: {} });
   const gateway = new GameplayGateway({
@@ -51,6 +59,7 @@ function fixture() {
   );
   gateway.attach(socket, actor);
   socket.data.ready = true;
+  movementStreamView(actor);
   return { gateway, actor, socket, world };
 }
 function input(probe, sequence, targetTick, extra = {}) {
@@ -64,6 +73,11 @@ function input(probe, sequence, targetTick, extra = {}) {
       inputSeq: sequence,
       fieldEpoch: "field",
       targetTick,
+      motionEpoch: probe.actor.movementStream.epoch,
+      motionConfig: probe.actor.movementStream.configurations.at(-1).version,
+      movementLocked: false,
+      impulses: [],
+      motion: { x: 80, y: 274, vx: 0, vy: 0 },
       horizontal: 1,
       vertical: 0,
       jump: false,
@@ -75,26 +89,28 @@ function input(probe, sequence, targetTick, extra = {}) {
 
 test("delayed ordinary movement can arrive in a burst without disconnecting or losing fresh edges", () => {
   const probe = fixture();
+  probe.actor.field.tick = 200;
   for (let sequence = 1; sequence <= 20; sequence++) {
-    input(probe, sequence, 79 + sequence);
+    input(probe, sequence, 100 + sequence);
   }
-  input(probe, 21, 101, { jump: true });
-  input(probe, 22, 102, { attack: true });
+  input(probe, 21, 121, { jump: true });
+  input(probe, 22, 122, { attack: true });
   expect(probe.socket.data.closed).toBe(false);
-  expect(probe.actor.inputQueue.get(101).jump).toBe(true);
-  expect(probe.actor.inputQueue.get(102).attack).toBe(true);
-  expect(probe.actor.field.tick).toBe(100);
-  expect(probe.actor.ackInputSeq).toBe(20);
+  expect(probe.actor.inputQueue.get(121).jump).toBe(true);
+  expect(probe.actor.inputQueue.get(122).attack).toBe(true);
+  expect(probe.actor.field.tick).toBe(200);
+  expect(probe.actor.ackInputSeq).toBeUndefined();
+  expect(probe.actor.inputQueue.size).toBe(22);
 });
 
-test("an early clock estimate is retired while sustained excessive traffic remains bounded", () => {
+test("a forged path gap is rejected and sustained traffic remains bounded", () => {
+  const invalid = fixture();
+  input(invalid, 1, 1000);
+  expect(invalid.socket.data.closed).toBe(true);
+  expect(invalid.socket.sent.at(-1).code).toBe("INVALID_MESSAGE");
   const probe = fixture();
-  input(probe, 1, 1000);
-  expect(probe.actor.ackInputSeq).toBe(1);
-  expect(probe.actor.inputQueue.size).toBe(0);
-  expect(probe.socket.data.closed).toBe(false);
-  for (let sequence = 2; sequence <= 200; sequence++) {
-    input(probe, sequence, 50);
+  for (let sequence = 1; sequence <= 200; sequence++) {
+    input(probe, sequence, 100 + sequence);
   }
   expect(probe.socket.data.closed).toBe(true);
   expect(probe.socket.sent.at(-1).code).toBe("RATE_LIMITED");
@@ -189,7 +205,7 @@ test.each([0, 1])(
       receivedAt: 30000,
       paused: false,
     });
-    const targetTick = inputTargetTick(clock, 30000);
+    const targetTick = probe.actor.movementStream.tick + 1;
     probe.actor.field.tick += 1;
     const tick = probe.actor.field.tick;
     input(probe, 1, targetTick, {
@@ -200,7 +216,7 @@ test.each([0, 1])(
       horizontal: 1,
       motion: { x: 120, y: 0, vx: 125, vy: 0 },
     });
-    expect(probe.actor.attackEdges).toHaveLength(1);
+    expect(probe.actor.attackEdges).toHaveLength(0);
     expect(probe.actor.field.tick).toBe(tick);
     expect(probe.socket.data.closed).toBe(false);
   },

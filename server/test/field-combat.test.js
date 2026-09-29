@@ -1,3 +1,12 @@
+import { movementStreamView } from "../src/movement-stream.js";
+import { createSimulation } from "../../client/src/physics/simulation.js";
+import {
+  createHeldInput,
+  assignHeldInput,
+  stepMotion,
+  captureMotion,
+  restoreMotion,
+} from "../../shared/motion.js";
 import { afterEach, expect, test } from "bun:test";
 import { loadContent } from "../src/content.js";
 import { OnlineWorld } from "../src/world.js";
@@ -107,19 +116,35 @@ test("server and client project the same modern stats and ordinary hit", async (
 
 test("late attack input is admitted once with its original identity and fresh combat presentation", async () => {
   const { world, actor, field } = await fixture();
+  field.tick = 80;
+  world.moveActor(actor);
+  const client = createSimulation(field.physics, {
+    x: actor.simulation.x,
+    y: actor.simulation.y,
+  });
+  restoreMotion(client, captureMotion(actor.simulation));
+  const held = createHeldInput();
   field.tick = 100;
-  const input = {
-    fieldEpoch: field.epoch,
-    inputSeq: 1,
-    targetTick: 90,
-    horizontal: 0,
-    vertical: 0,
-    attack: true,
-    jump: false,
-  };
-  world.input(actor, input);
-  world.input(actor, { ...input, inputSeq: 2, attack: false });
-  expect(actor.inputQueue.size).toBe(0);
+  for (let sequence = 1; sequence <= 2; sequence++) {
+    const input = {
+      fieldEpoch: field.epoch,
+      ...movementStreamView(actor),
+      inputSeq: sequence,
+      targetTick: 80 + sequence,
+      horizontal: 0,
+      vertical: 0,
+      attack: sequence === 1,
+      jump: false,
+      movementLocked: false,
+      impulses: [],
+    };
+    assignHeldInput(held, input);
+    stepMotion(client, held);
+    const { x, y, vx, vy } = client;
+    world.input(actor, { ...input, motion: { x, y, vx, vy } });
+  }
+  expect(actor.inputQueue.size).toBe(2);
+  world.tickField(field);
   world.tickField(field);
   expect(actor.skillField.phase).toBe("attack");
   expect(actor.combatPresentation.inputSeq).toBe(1);

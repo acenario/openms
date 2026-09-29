@@ -104,7 +104,13 @@ function analyze(rows, id) {
     changedAt = 0;
   let minimumY = Infinity,
     maximumY = -Infinity;
-  const path = { heldFrames: 0, dryMovement: 0, queued: 0, snaps: 0 };
+  const path = {
+    heldFrames: 0,
+    dryMovement: 0,
+    queued: 0,
+    snaps: 0,
+    drainedAt: null,
+  };
   for (const row of rows) {
     const actor = row.actors.find((entry) => entry.id === id);
     if (!actor || !actor.visible) continue;
@@ -117,7 +123,7 @@ function analyze(rows, id) {
       );
       maximumStep = Math.max(maximumStep, step);
       if (actor.movePath) {
-        analyzePath(path, actor, previous, row.time - changedAt);
+        analyzePath(path, actor, previous, row.time);
       }
       if (
         actor.observedX !== previous.observedX ||
@@ -133,7 +139,7 @@ function analyze(rows, id) {
   return { id, maximumStep, moving, lateMoving, minimumY, maximumY, path };
 }
 
-function analyzePath(result, actor, previous, age) {
+function analyzePath(result, actor, previous, now) {
   const step = Math.hypot(
     actor.renderX - previous.renderX,
     actor.renderY - previous.renderY,
@@ -142,9 +148,17 @@ function analyzePath(result, actor, previous, age) {
   result.queued = Math.max(result.queued, path.queued);
   result.snaps = Math.max(result.snaps, path.backlogSnaps + path.capacitySnaps);
   if (
-    age > 90 &&
-    path.queued === 0 &&
-    previous.movePath?.queued === 0 &&
+    result.drainedAt === null ||
+    path.queued > 0 ||
+    previous.movePath?.queued > 0 ||
+    path.tick !== previous.movePath?.tick
+  ) {
+    result.drainedAt = now;
+  }
+  // A drained path still interpolates its final accepted quantum for up to 30 ms.
+  // Packet age cannot identify exhaustion when a delayed burst is still playing.
+  if (
+    now - result.drainedAt > 60 &&
     actor.observedX === previous.observedX &&
     actor.observedY === previous.observedY
   ) {

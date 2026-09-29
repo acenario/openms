@@ -7,7 +7,6 @@ import {
 } from "../../shared/protocol.js";
 import { OnlineTransport } from "../src/online/transport.js";
 import { createDefaultBindings } from "../src/input/keymap.js";
-import { inputHorizonTicks } from "../src/online/input-timing.js";
 
 function transition(phase, fieldEpoch, eventSeq) {
   return decodeServer(
@@ -150,7 +149,18 @@ function timing(fieldEpoch, serverTick) {
 }
 
 function input(targetTick) {
-  return { targetTick, horizontal: 1, vertical: 0, jump: false, attack: false };
+  return {
+    targetTick,
+    motionEpoch: 1,
+    motionConfig: 1,
+    movementLocked: false,
+    impulses: [],
+    motion: { x: 0, y: 0, vx: 0, vy: 0 },
+    horizontal: 1,
+    vertical: 0,
+    jump: false,
+    attack: false,
+  };
 }
 
 // Returning to the same field retires its old baseline just like inter-map travel.
@@ -187,23 +197,20 @@ for (const [phase, destination] of [
   });
 }
 
-test("neutral events are deduplicated while local time continues through delayed observations", () => {
+test("neutral lifecycle events clear held controls without inventing a movement step", () => {
   const { transport, sent } = connected();
+  let clears = 0;
+  transport.callbacks.onClearInput = () => clears++;
   try {
-    // Synthetic receive time zero keeps the inflated estimate ahead regardless of
-    // test-runner scheduling; no sleeps or process-global clock replacement.
     transport.timing(timing("source", 13), performance.now() - 1000, 300);
     for (let event = 0; event < 16; event++) transport.neutral();
-    const leadTick = sent[0].targetTick;
-    expect(leadTick).toBeGreaterThan(13 + inputHorizonTicks(transport.clock));
-    expect(sent.map((message) => message.targetTick)).toEqual([leadTick]);
-    expect(transport.sendInput(input(leadTick))).toBeNull();
-    expect(transport.sendInput(input(leadTick + 1))).toBe(2);
-    expect(sent[1]).toMatchObject({
+    expect(sent).toEqual([]);
+    expect(clears).toBe(16);
+    expect(transport.sendInput(input(14))).toBe(1);
+    expect(sent[0]).toMatchObject({
       type: "input",
       fieldEpoch: "source",
-      targetTick: leadTick + 1,
-      horizontal: 1,
+      targetTick: 14,
     });
   } finally {
     transport.close();
@@ -238,18 +245,13 @@ test("committed travel cannot use source timing or an unscoped heartbeat for des
     transport.neutral();
     expect(sent.filter((message) => message.type === "input")).toEqual([]);
     transport.timing(timing("destination", 13), performance.now(), 300);
-    for (let event = 0; event < 16; event++) transport.neutral();
+    transport.sendInput(input(14));
     const inputs = sent.filter((message) => message.type === "input");
     expect(inputs).toHaveLength(1);
     expect(inputs[0]).toMatchObject({
       fieldEpoch: "destination",
     });
-    expect(inputs[0].targetTick).toBeGreaterThan(
-      13 + PROTOCOL.INPUT_LEAD_TICKS,
-    );
-    expect(inputs[0].targetTick).toBeLessThanOrEqual(
-      13 + inputHorizonTicks(transport.clock),
-    );
+    expect(inputs[0].targetTick).toBe(14);
   } finally {
     transport.close();
   }

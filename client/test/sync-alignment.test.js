@@ -4,7 +4,6 @@ import { createSimulation } from "../src/physics/simulation.js";
 import { OnlinePrediction } from "../src/online/prediction.js";
 import { holdObservedClimb, OnlineScene } from "../src/online/scene.js";
 import { ServerClock } from "../src/online/transport-clock.js";
-import { inputHorizonTicks } from "../src/online/input-timing.js";
 import { PROTOCOL } from "../../shared/protocol.js";
 import {
   createHeldInput,
@@ -160,11 +159,14 @@ function presentable(onGroundJump) {
     connectionEpoch: "epoch",
     fieldEpoch: "field",
     serverTick: 6,
+    motionEpoch: 1,
+    motionConfig: 1,
+    motionTick: 6,
     ackInputSeq: 1,
     paused: false,
     motion: captureMotion(simulation),
   });
-  const clock = performance.now();
+  const clock = prediction.lastStepAt;
   prediction.timing({
     ready: true,
     connectionEpoch: "epoch",
@@ -299,13 +301,14 @@ test("late scheduler wakes preserve the sub-tick phase of a steady local walk", 
   }
 });
 
-test("a checkpoint correction preserves the pose between movement ticks", () => {
+test("an ordinary checkpoint leaves the kernel and interpolation phase untouched", () => {
   const clock = spyOn(performance, "now").mockReturnValue(1000);
   try {
     const { prediction, simulation } = presentable();
     prediction.lastStepAt = 985;
     const before = { ...prediction.interpolate(1000, {}) };
     for (const shift of [0.63, 12, 0]) {
+      const currentX = simulation.x;
       const motion = captureMotion(simulation);
       motion.x -= shift;
       // A changed previous state also alters the drawn pose when current X agrees.
@@ -314,6 +317,9 @@ test("a checkpoint correction preserves the pose between movement ticks", () => 
         connectionEpoch: "epoch",
         fieldEpoch: "field",
         serverTick: prediction.predictedTick,
+        motionEpoch: 1,
+        motionConfig: 1,
+        motionTick: prediction.predictedTick,
         ackInputSeq: 1,
         paused: false,
         motion,
@@ -321,7 +327,7 @@ test("a checkpoint correction preserves the pose between movement ticks", () => 
       const after = prediction.interpolate(1000, {});
       expect(after.x).toBeCloseTo(before.x, 6);
       expect(after.y).toBeCloseTo(before.y, 6);
-      expect(simulation.x).toBe(motion.x);
+      expect(simulation.x).toBe(currentX);
     }
   } finally {
     clock.mockRestore();
@@ -550,6 +556,9 @@ test("a local ground jump cues sound before any checkpoint, with silent replay a
       connectionEpoch: "epoch",
       fieldEpoch: "field",
       serverTick: tick,
+      motionEpoch: 1,
+      motionConfig: 1,
+      motionTick: prediction.predictedTick,
       ackInputSeq: 1,
       paused: false,
       motion,
@@ -597,6 +606,9 @@ test("checkpoint jumps, sequence wrap and rejoin never emit delayed jump audio",
       connectionEpoch: "epoch",
       fieldEpoch: "field",
       serverTick: ++tick,
+      motionEpoch: 1,
+      motionConfig: 1,
+      motionTick: prediction.predictedTick,
       ackInputSeq: 1,
       paused: false,
       motion: captureMotion(source),
@@ -653,6 +665,9 @@ test("prediction covers network delay within a bounded history horizon", () => {
     connectionEpoch: "epoch",
     fieldEpoch: "destination",
     serverTick: 13,
+    motionEpoch: 1,
+    motionConfig: 1,
+    motionTick: 13,
     ackInputSeq: null,
     paused: false,
     motion: captureMotion(simulation),
@@ -677,12 +692,8 @@ test("prediction covers network delay within a bounded history horizon", () => {
     jump: false,
     attack: false,
   });
-  expect(sent[0].targetTick).toBeGreaterThan(
-    observation.serverTick + PROTOCOL.INPUT_LEAD_TICKS,
-  );
-  expect(sent.at(-1).targetTick).toBeGreaterThan(
-    observation.serverTick + inputHorizonTicks(clock),
-  );
+  expect(sent[0].targetTick).toBe(observation.motionTick + 1);
+  expect(sent.at(-1).targetTick).toBe(observation.motionTick + 9);
   expect(prediction.count).toBeLessThan(PROTOCOL.INPUT_HISTORY);
   // The same sample reports the bounded motion state it extends, for the server's
   // adoption check; the values are asserted by the divert-alignment suite.
@@ -719,6 +730,9 @@ test("a freshly installed predictor waits for matching field timing", () => {
     connectionEpoch: "epoch",
     fieldEpoch: "destination",
     serverTick: 13,
+    motionEpoch: 1,
+    motionConfig: 1,
+    motionTick: 13,
     ackInputSeq: null,
     paused: false,
     motion: before,

@@ -81,6 +81,7 @@ const transport = new OnlineTransport({
   onSnapshot: install,
   onState: state,
   onMotion: motion,
+  onClearInput: clearInput,
   onPeers: peers,
   onTiming: timing,
   onEvent: event,
@@ -415,7 +416,11 @@ function entryPortal(portals, position) {
 
 /** Every caller uses the same bounded fixed-step clock, independent of frame cadence. */
 function advance(now = performance.now()) {
-  if (destroyed || transport.status !== "active" || document.hidden) return;
+  if (destroyed || transport.status !== "active") return;
+  if (document.hidden) {
+    prediction.lastStepAt = now;
+    return;
+  }
   try {
     if (input.state.upPressed && !isBlocked()) portal();
     const steps = prediction.advance(now, isBlocked() ? neutral : input.state);

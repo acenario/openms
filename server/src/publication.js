@@ -1,4 +1,5 @@
 import { PROTOCOL, protocolError } from "../../shared/protocol.js";
+import { movementStreamView } from "./movement-stream.js";
 import { captureMotion } from "../../shared/motion.js";
 import { opaqueId } from "./auth.js";
 import { serverOwnsPosition, combatMotionOwner } from "./motion-authority.js";
@@ -81,6 +82,7 @@ export class Publications {
       type: "motion",
       fieldEpoch: actor.field.epoch,
       paused: actor.field.paused,
+      ...movementStreamView(actor),
       ackInputSeq: actor.ackInputSeq ?? null,
       motion: captureMotion(actor.simulation),
       // The browser owns its ordinary XY; only server-owned state repositions it.

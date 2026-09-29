@@ -1,6 +1,7 @@
+import { worldFamily } from "../../client/src/skills/skill-world-rules.js";
+import { resetMovementStream } from "./movement-stream.js";
 import { SkillSystem } from "../../client/src/skills/skill-system.js";
 import { SkillCosts } from "../../client/src/skills/skill-costs.js";
-import { FLASH_SKILLS } from "../../client/src/skills/skill-world-rules.js";
 import { awaitSkillInput } from "./skill-input-order.js";
 import { AvatarVisuals } from "../../client/src/character/avatar-visuals.js";
 import { AuthorityCombat } from "./combat-controller.js";
@@ -387,8 +388,9 @@ function admitCast(world, actor, action) {
 export async function castSkill(world, actor, action, operation) {
   actor.skillExecuting = true;
   let drops = null;
+  let motionAdmitted = false;
   try {
-    if (FLASH_SKILLS.has(action.skillId)) await awaitSkillInput(world, actor);
+    await awaitSkillInput(world, actor, action.skillId);
     const plan = admitCast(world, actor, action);
     if (plan.controller.basicFallback) {
       return await castBasicFallback(world, actor, plan, operation);
@@ -435,11 +437,20 @@ export async function castSkill(world, actor, action, operation) {
       receipt,
       deferred,
     });
+    motionAdmitted = true;
     return receipt;
   } finally {
-    if (drops) releaseSkillDrops(drops);
-    actor.skillExecuting = false;
+    finishCastMotion(actor, action.skillId, drops, motionAdmitted);
   }
+}
+
+function finishCastMotion(actor, skillId, drops, admitted) {
+  if (!admitted && worldFamily(skillId) === "impulse") {
+    resetMovementStream(actor);
+  }
+  if (drops) releaseSkillDrops(drops);
+  actor.skillExecuting = false;
+  actor.movementBarrier = null;
 }
 
 async function castBasicFallback(world, actor, plan, operation) {

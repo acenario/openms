@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { loadContent } from "../src/content.js";
+import { movementStreamView } from "../src/movement-stream.js";
 import { OnlineWorld } from "../src/world.js";
 import { prepareActorCombat } from "../src/field-combat.js";
 import { prepareActorSkills, disposeActorSkills } from "../src/field-skills.js";
@@ -106,7 +107,10 @@ function input(actor, motion) {
   return {
     fieldEpoch: actor.field.epoch,
     inputSeq: sequence,
-    targetTick: actor.field.tick + 1,
+    ...movementStreamView(actor),
+    targetTick: actor.movementStream.tick + actor.inputQueue.size + 1,
+    movementLocked: false,
+    impulses: [],
     horizontal: 0,
     vertical: 0,
     jump: false,
@@ -122,42 +126,38 @@ function advance(probe, ticks) {
   }
 }
 
-test("missing movement becomes neutral and later reports cannot grant the lost travel", async () => {
+test("delayed movement follows the complete client path through the real world admission", async () => {
   const probe = await fixture(10000);
   try {
     const { actor, world, field } = probe;
-    const client = createSimulation(field.manifest.physics, {
-      x: 0,
-      y: 0,
-      facing: 1,
-    });
+    world.moveActor(actor);
+    const client = createSimulation(field.manifest.physics, { x: 0, y: 0 });
     restoreMotion(client, captureMotion(actor.simulation));
     const held = createHeldInput();
+    const pending = [];
+    let targetTick = actor.movementStream.tick;
     for (let tick = 0; tick < 240; tick++) {
       held.right = tick < 130;
+      stepMotion(client, held);
       const sample = input(actor, {
         x: client.x,
         y: client.y,
         vx: client.vx,
         vy: client.vy,
       });
+      sample.targetTick = ++targetTick;
       sample.horizontal = held.right ? 1 : 0;
-      // A 1.5-second delivery stall spans several adjacent ground segments.
-      if (tick < 80 || tick >= 130) world.input(actor, sample);
-      stepMotion(client, held);
+      pending.push(sample);
+      if (tick < 80 || tick >= 130) {
+        for (const packet of pending) world.input(actor, packet);
+        pending.length = 0;
+      }
       advance(probe, 1);
-      expect(
-        actor.retiring,
-        JSON.stringify({
-          tick,
-          faults: faults(probe),
-          client: { x: client.x, y: client.y },
-          server: { x: actor.simulation.x, y: actor.simulation.y },
-        }),
-      ).not.toBe(true);
+      expect(actor.retiring).not.toBe(true);
     }
     expect(faults(probe)).toEqual([]);
-    expect(Math.abs(actor.simulation.x - client.x)).toBeGreaterThan(50);
+    expect(actor.simulation.x).toBe(client.x);
+    expect(actor.simulation.y).toBe(client.y);
   } finally {
     dispose(probe);
   }
@@ -197,15 +197,14 @@ test("even a small client-reported displacement cannot replace the server kernel
     actor.simulation.y = 0;
     actor.simulation.vx = 0;
     actor.simulation.vy = 0;
-    const expected = createSimulation(field.manifest.physics, { x: 0, y: 0 });
-    restoreMotion(expected, captureMotion(actor.simulation));
-    stepMotion(expected, createHeldInput());
+    world.moveActor(actor);
+    const expected = captureMotion(actor.simulation);
     const report = { x: 3, y: -1, vx: 120, vy: 0 };
     world.input(actor, input(actor, report));
     advance(probe, 1);
-    expect(captureMotion(actor.simulation)).toEqual(captureMotion(expected));
-    expect(faults(probe)).toEqual([]);
-    expect(actor.lastAdoptedTick).toBe(field.tick);
+    expect(captureMotion(actor.simulation)).toEqual(expected);
+    expect(actor.retiring).toBe(true);
+    expect(field.tick).toBe(1);
   } finally {
     dispose(probe);
   }
@@ -217,80 +216,12 @@ test("a report without motion leaves the authoritative simulation untouched", as
     const { world, actor } = probe;
     actor.simulation.x = 12;
     actor.simulation.y = 0;
-    world.input(actor, input(actor, null));
+    expect(() => world.input(actor, input(actor, null))).toThrow(
+      "INVALID_MESSAGE",
+    );
     advance(probe, 1);
     expect(actor.simulation.x).not.toBe(12 + 40);
     expect(actor.lastAdoptedTick).toBe(0);
-  } finally {
-    dispose(probe);
-  }
-});
-
-test("ordinary locks, seats and transitions all retain server position", async () => {
-  const probe = await fixture();
-  try {
-    const { world, actor } = probe;
-    place(actor, 0, 0);
-    actor.simulation.movementLocked = true;
-    world.input(actor, input(actor, { x: 5, y: -2, vx: 100, vy: 0 }));
-    advance(probe, 1);
-    expect(actor.simulation.previousX).toBe(0);
-    actor.simulation.movementLocked = false;
-    // An authored seat is server-owned and keeps the authority's own state.
-    actor.simulation.seat = { x: 0, y: 0 };
-    world.input(actor, input(actor, { x: 9, y: -3, vx: 100, vy: 0 }));
-    advance(probe, 1);
-    expect(actor.simulation.previousX).not.toBe(9);
-    actor.simulation.seat = null;
-    // A pending field transition is server-owned too.
-    actor.pending = true;
-    actor.transition = {};
-    world.input(actor, input(actor, { x: 12, y: -4, vx: 100, vy: 0 }));
-    advance(probe, 1);
-    expect(actor.simulation.previousX).not.toBe(12);
-    expect(faults(probe)).toEqual([]);
-  } finally {
-    dispose(probe);
-  }
-});
-
-test("an isolated deviation is recorded without moving or punishing the character", async () => {
-  const probe = await fixture();
-  try {
-    const { world, actor } = probe;
-    // Outside the lag-aware envelope, far inside the hard teleport bound.
-    place(actor, 0, 0);
-    const report = { x: plausiblePositionPx(30) + 8, y: 0, vx: 0, vy: 0 };
-    world.input(actor, input(actor, report));
-    advance(probe, 1);
-    expect(actor.simulation.previousX).toBe(0);
-    expect(faults(probe)).toEqual([]);
-    expect(world.watchdog.snapshot().suspicious).toBe(1);
-  } finally {
-    dispose(probe);
-  }
-});
-
-test("repeated deviations inside one window close the session", async () => {
-  const probe = await fixture();
-  try {
-    const { world, field, actor } = probe;
-    const limit = WATCHDOG_POLICY.suspicionLimit;
-    for (let count = 0; count < limit && !actor.retiring; count++) {
-      field.tick += WATCHDOG_POLICY.episodeTicks;
-      place(actor, 0, 0);
-      world.input(
-        actor,
-        input(actor, { x: plausiblePositionPx(30) + 8, y: 0, vx: 0, vy: 0 }),
-      );
-      advance(probe, 1);
-    }
-    expect(faults(probe).length).toBeGreaterThanOrEqual(1);
-    expect(actor.retiring).toBe(true);
-    const closing = probe.publications.filter(
-      (entry) => entry.message.type === "closing",
-    );
-    expect(closing.at(-1)?.message.code).toBe("NOT_ALLOWED");
   } finally {
     dispose(probe);
   }
@@ -301,12 +232,13 @@ test("one impossible report faults immediately and is not adopted", async () => 
   try {
     const { world, actor } = probe;
     place(actor, 0, 0);
+    world.moveActor(actor);
     const teleport = plausiblePositionPx(PROTOCOL.TICK_MS) * 10;
     world.input(actor, input(actor, { x: teleport, y: 0, vx: 0, vy: 0 }));
     advance(probe, 1);
     expect(actor.simulation.previousX).not.toBe(teleport);
     expect(actor.retiring).toBe(true);
-    expect(probe.events.some((entry) => entry.event === "watchdog.fault")).toBe(
+    expect(probe.events.some((entry) => entry.event === "motion.fault")).toBe(
       true,
     );
   } finally {
@@ -355,7 +287,7 @@ test("a resume beyond any possible motion is refused", async () => {
 });
 
 for (const value of ["false", "true"]) {
-  test(`configured watchdog ${value} controls ordinary motion faults`, async () => {
+  test(`configured watchdog ${value} cannot disable trajectory validation`, async () => {
     const config = serverConfig({
       DATABASE_URL: "postgres://unused.invalid/watchdog_test",
       OPENMS_MOTION_WATCHDOG_ENABLED: value,
@@ -364,12 +296,13 @@ for (const value of ["false", "true"]) {
     try {
       const { world, actor } = probe;
       place(actor, 0, 0);
+      world.moveActor(actor);
       const report = { x: 10000, y: 0, vx: 0, vy: 0 };
       world.input(actor, input(actor, report));
       advance(probe, 1);
       expect(actor.simulation.previousX).not.toBe(report.x);
-      expect(Boolean(actor.retiring)).toBe(config.watchdogEnabled);
-      expect(faults(probe).length > 0).toBe(config.watchdogEnabled);
+      expect(Boolean(actor.retiring)).toBe(true);
+      expect(faults(probe).length > 0).toBe(true);
       if (!config.watchdogEnabled) {
         expect(world.watchdog.snapshot()).toEqual({
           enabled: false,
@@ -477,6 +410,7 @@ test("a recorded divert is published on the wire and validates as a server frame
     world.publish(actor, {
       type: "motion",
       fieldEpoch: field.epoch,
+      ...movementStreamView(actor),
       ackInputSeq: actor.ackInputSeq,
       motion: captureMotion(actor.simulation),
       paused: false,
@@ -499,6 +433,7 @@ test("a recorded divert is published on the wire and validates as a server frame
     world.publish(actor, {
       type: "motion",
       fieldEpoch: field.epoch,
+      ...movementStreamView(actor),
       ackInputSeq: actor.ackInputSeq,
       motion: captureMotion(actor.simulation),
       paused: false,

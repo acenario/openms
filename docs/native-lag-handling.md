@@ -201,7 +201,7 @@ and `009726ae → 0068b371` (the controller path). The separate lookup `009716ed
 checks the local character at manager `+8`, then falls back to `00971709`; ordinary
 player movement dispatch deliberately uses the latter. This evidence does **not** show
 an ordinary movement echo correcting the local player. It is not an acknowledgement
-and rollback protocol like OpenMS's.
+and rollback protocol. OpenMS now uses [validated local trajectories](client-driven-movement.md).
 
 Local server packet dispatch is separate: `009726d3 → 00950747`, opcodes 0xcd..0xea.
 For example, 0xcf reaches `00959727`, selects a server-specified field portal and calls
@@ -346,22 +346,16 @@ another 5000 ms) are tested. The owner-interface trace above proves player type 
 branch; OpenMS now uses it. Mob snapshot forecasting remains a separate OpenMS policy.
 
 **Local correction boundary.** The recovered local input/controller path does not wait
-for a server echo. OpenMS already implements immediate local 30 ms input prediction,
-trusted checkpoint restore, silent retained-input replay and contact-constrained visual
-easing. The supplied directory contains no original server executable/source, and this
-inspection does not establish its validation, acknowledgement/replay protocol or a local
-correction smoothing constant. Those existing OpenMS mechanisms remain explicitly
-OpenMS authority policy; adopting client-reported positions would not follow from this
-client evidence. Long upstream stalls can still cause corrections when inputs expire.
+for a server echo. OpenMS now follows that separation: local 30 ms movement and interpolation
+run on the local clock, completed steps are validated server-side, and ordinary acknowledgements
+never restore or replay the local character. Explicit server-owned actions and lifecycle
+recovery retain separate position-setting paths. See [the current contract](client-driven-movement.md).
 
-The follow-up also corrected local presentation timing: interpolation now preserves the
-scheduled quantum's fractional remainder, due fixed steps complete before drawing, and
-one fresh local time sample drives both operations. Reconciliation detects changes to
-previous as well as current XY. The server tick clock acquires nine samples promptly,
-then slews by at most 6 ms/s so arrival jitter cannot visibly pulse walking speed.
-These clock-fit bounds are OpenMS policy. See the
-[2,000 ms RTT measurements](validation.md#native-movement-clocks-at-high-latency-2026-09-29)
-for walking, landing, delivery-stall recovery and the remaining scope limits.
+The supplied directory contains no original server executable/source. The shared-kernel
+validator, server time budget, ability revisions, one-use force approvals and wire bounds are
+OpenMS policy. They are not claims about the original server's anti-cheat implementation.
+The earlier [2,000 ms RTT measurements](validation.md#native-movement-clocks-at-high-latency-2026-09-29)
+record the preceding correction/replay implementation, which the current policy supersedes.
 
 Focused proof uses `client/test/native-move-path.test.js`,
 `client/test/remote-move-stream.test.js` and `server/test/remote-presentation.test.js`.
@@ -531,10 +525,8 @@ Rotation is assigned at `00506142` inside `00505900` from the master clock
 6. Implemented. [Online movement](movement-parity.md#remote-motion) buffers remote
    paths, carries their partial duration across packets, replays native Hermite samples,
    holds a dry path and catches up at 32 ms per step above the player backlog threshold.
-   The local player's own reconciliation in
-   [prediction.js](../client/src/online/prediction.js) absorbs sub-pixel error, eases larger
-   error with a smoothstep window capped at walk speed, and presents only a disagreement
-   beyond the band outright.
+   [Local movement](client-driven-movement.md) now ignores ordinary position echoes after
+   retiring acknowledged input. Server validation governs shared-world positions independently.
 7. Implemented. The attacking client resolves its own hit presentation in
    [local-hits.js](../client/src/online/local-hits.js) at the authored release frame: it tests
    the same admitted rectangle (`attackRectangle`/`actionWeapon`) against each mob's authored

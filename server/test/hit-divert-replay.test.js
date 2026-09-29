@@ -10,9 +10,8 @@ import {
   captureMotion,
   createHeldInput,
   assignHeldInput,
-  restoreMotion,
-  stepMotion,
 } from "../../shared/motion.js";
+import { movementStreamView } from "../src/movement-stream.js";
 import { OnlinePrediction } from "../../client/src/online/prediction.js";
 
 const content = await loadContent();
@@ -114,6 +113,7 @@ function reportSamples(world, field, actor) {
     world.input(actor, {
       ...sample,
       motion: { ...sample.motion },
+      impulses: structuredClone(sample.impulses),
       fieldEpoch: field.epoch,
       inputSeq: sequence,
     });
@@ -130,6 +130,9 @@ function sampleFrame(prediction, message, field, tick) {
     connectionEpoch: "epoch",
     fieldEpoch: field.epoch,
     serverTick: field.tick,
+    motionEpoch: message.motionEpoch,
+    motionConfig: message.motionConfig,
+    motionTick: message.motionTick,
     ackInputSeq: message.ackInputSeq,
     paused: false,
     motion: message.motion,
@@ -160,6 +163,7 @@ function sampleFrame(prediction, message, field, tick) {
 async function lockstep({ lead, ticks, hitAfter }) {
   const probe = await fixture();
   const { world, field, actor } = probe;
+  world.moveActor(actor);
   airborne(actor.simulation);
   const prediction = new OnlinePrediction({
     onInput: reportSamples(world, field, actor),
@@ -169,6 +173,7 @@ async function lockstep({ lead, ticks, hitAfter }) {
     connectionEpoch: "epoch",
     fieldEpoch: field.epoch,
     serverTick: 0,
+    ...movementStreamView(actor),
     ackInputSeq: null,
     paused: false,
     motion: captureMotion(actor.simulation),
@@ -191,7 +196,7 @@ async function lockstep({ lead, ticks, hitAfter }) {
   return { ...probe, prediction, presented };
 }
 
-test("a midair mob knockback rebases prediction once and replays the exact trusted continuation", async () => {
+test("a midair mob knockback merges once into the local path and validates after delayed delivery", async () => {
   const hitAfter = 3;
   const divertTick = hitAfter + 1;
   const result = await lockstep({ lead: 4, ticks: 8, hitAfter });
@@ -210,30 +215,19 @@ test("a midair mob knockback rebases prediction once and replays the exact trust
     expect(divert.vx).toBe(270);
     expect(divert.vy).toBe(-270);
     expect(divert.skillId).toBe(0);
-    // The checkpoint contains the impulse; replay must not add it a second time.
-    const frame = result.presented[divertTick - 1];
     expect(result.prediction.snapshot().diverts).toBe(1);
-    expect(result.prediction.snapshot().corrections).toBe(1);
-    // The drawn pose starts exactly where the player already saw it — an impulse is a
-    // velocity change, never a positional correction.
-    expect(
-      Math.hypot(frame.drawn.x - frame.shown.x, frame.drawn.y - frame.shown.y),
-    ).toBeLessThanOrEqual(0.001);
-    expect(frame.glide.at(-1).x).toBeCloseTo(frame.motion.x, 6);
-    expect(frame.glide.at(-1).y).toBeCloseTo(frame.motion.y, 6);
-    const reference = cloneSimulation(result.field, result.actor.simulation);
-    restoreMotion(reference, captureMotion(result.actor.simulation));
-    const held = createHeldInput();
-    for (
-      let tick = result.field.tick;
-      tick < result.prediction.predictedTick;
-      tick++
-    ) {
-      stepMotion(reference, held);
+    expect(result.prediction.snapshot().corrections).toBe(0);
+    expect(result.prediction.snapshot().replayedTicks).toBe(0);
+    for (let count = 0; count < 4; count++) {
+      result.world.tickField(result.field);
     }
-    expect(captureMotion(result.prediction.simulation)).toEqual(
-      captureMotion(reference),
-    );
+    expect(result.actor.retiring).not.toBe(true);
+    expect(result.actor.inputQueue.size).toBe(0);
+    const local = result.prediction.simulation;
+    expect(result.actor.simulation.x).toBe(local.x);
+    expect(result.actor.simulation.y).toBe(local.y);
+    expect(result.actor.simulation.vx).toBe(local.vx);
+    expect(result.actor.simulation.vy).toBe(local.vy);
   } finally {
     dispose(result);
   }

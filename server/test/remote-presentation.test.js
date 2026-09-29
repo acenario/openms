@@ -1,3 +1,5 @@
+import { recordPeerMove, collectPeerMoves } from "../src/peer-move-stream.js";
+import { RemotePlayerPath } from "../../client/src/online/remote-player-path.js";
 import { expect, test } from "bun:test";
 import { actorEntity, peerMotionEntity } from "../src/field-views.js";
 import { OnlineWorld } from "../src/world.js";
@@ -44,6 +46,7 @@ test("peer projection publishes detached effective gravity and ladder limits in 
   const projection = decodeServer(JSON.stringify(message(view))).changes[0]
     .entity.playerMotion;
   expect(projection).toEqual({
+    pathTick: 0,
     state: "ladder",
     gravity: 1000,
     fallSpeed: 300,
@@ -287,4 +290,27 @@ test("path duration and discontinuity fields reject malformed wire values", () =
   frame.entries[0].durationMs = 30;
   frame.entries[0].moveType = 7;
   expect(() => decodeServer(JSON.stringify(frame))).toThrow("INVALID_MESSAGE");
+});
+
+test("a joining observer cannot replay burst samples already covered by its baseline", () => {
+  const actor = movingActor("walker", 0);
+  const field = peerField([actor]);
+  actor.field = field;
+  actor.profile = createProfile({ mapId: "100000000", x: 0, y: 0, facing: 1 });
+  for (let step = 0; step < 4; step++) {
+    actor.simulation.x += 4;
+    recordPeerMove(actor, field);
+  }
+  const baseline = actorEntity(actor);
+  const path = new RemotePlayerPath(baseline, field.tick, 0);
+  const entries = collectPeerMoves([actor], field);
+  expect(entries).toHaveLength(4);
+  for (const entry of entries) expect(path.append(entry, 0)).toBe(false);
+  expect(path.current.x).toBe(baseline.position.x);
+  actor.simulation.x += 4;
+  recordPeerMove(actor, field);
+  expect(path.append(collectPeerMoves([actor], field)[0], 30)).toBe(true);
+  // A field transfer must not inherit a cursor from the retired field's queue.
+  actor.field = { ...field, epoch: "replacement", tick: 1 };
+  expect(actorEntity(actor).playerMotion.pathTick).toBe(1);
 });

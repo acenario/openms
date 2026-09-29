@@ -50,7 +50,7 @@ export function actorEntity(actor) {
     facing: sim.facing,
     action: animationId(name),
     actionStartTick: actor.actionStartTick,
-    playerMotion: playerMotion(sim),
+    playerMotion: baselinePlayerMotion(actor),
     appearance: {
       name: profile.name,
       gender: profile.gender,
@@ -63,6 +63,17 @@ export function actorEntity(actor) {
     ...actorWorldFields(actor),
     ...actorCombatFields(actor),
   };
+}
+
+/** The baseline covers recorded samples in this field only, including queued bursts. */
+function baselinePlayerMotion(actor) {
+  const projection = playerMotion(actor.simulation);
+  const pathTick =
+    actor.peerMoveQueue?.epoch === actor.field?.epoch
+      ? actor.peerMoveQueue?.tick
+      : null;
+  projection.pathTick = pathTick ?? actor.field?.tick ?? 0;
+  return projection;
 }
 
 /** Compact presentation-only coefficients, derived from admitted state, not another full checkpoint. */

@@ -365,13 +365,23 @@ const clientSchema = union("type", {
     fieldEpoch: id,
     inputSeq: seq,
     targetTick: revision,
+    motionEpoch: revision,
+    motionConfig: revision,
+    movementLocked: boolean,
+    impulses: array(
+      record({
+        id: nullable(revision),
+        source: enumeration("hit", "skill"),
+        skillId: u32,
+      }),
+      2,
+    ),
     horizontal: axis,
     vertical: axis,
     jump: boolean,
     attack: boolean,
-    // State the sample extends, at the end of targetTick - 1. `neutral` heartbeats
-    // carry no prediction and omit this optional diagnostic report.
-    motion: optional(reportedMotion),
+    // Endpoint of exactly one local 30 ms step, validated in stream order.
+    motion: reportedMotion,
   }),
   // Provisional outgoing digits follow the original input-edge roll (`009581a9`/`0066b05e`).
   // Reports are bounded telemetry. Server-generated damage and critical rolls remain final.
@@ -450,6 +460,7 @@ function mobEntityFragments(value) {
  *  no input, inventory or private checkpoint. Native player paths use opcode 0xb9;
  *  this wire adaptation publishes server-simulated samples every 30 ms. */
 const playerMotionSchema = record({
+  pathTick: optional(revision),
   state: enumeration("ground", "air", "ladder", "swim", "fly"),
   gravity: number(0, 1000000, false),
   fallSpeed: number(0, 1000000, false),
@@ -836,6 +847,7 @@ const serverBase = {
  *  receipt through the same `applyExternalImpulse` entry point the authority used
  *  rather than replaying a pre-impulse checkpoint. */
 const motionDivertSchema = record({
+  id: nullable(revision),
   sourceId: optional(id),
   tick: revision,
   vx: coordinate,
@@ -936,6 +948,9 @@ export const serverSchema = union("type", {
   }),
   motion: serverRecord("motion", {
     fieldEpoch: id,
+    motionEpoch: revision,
+    motionConfig: revision,
+    motionTick: revision,
     ackInputSeq: nullable(seq),
     paused: boolean,
     motion: motionSchema,

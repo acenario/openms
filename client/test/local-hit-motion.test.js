@@ -34,6 +34,9 @@ function fixture() {
     connectionEpoch: "connection",
     fieldEpoch: "field",
     serverTick: 0,
+    motionEpoch: 1,
+    motionConfig: 1,
+    motionTick: 0,
     ackInputSeq: null,
     paused: false,
     authoritative: true,
@@ -56,14 +59,17 @@ test("contact recoil draws before confirmation while reported movement remains u
   expect(pose.x).toBeGreaterThan(f.simulation.x + 10);
   expect(pose.y).toBeLessThan(f.simulation.y);
   expect(f.prediction.resumeMotion().x).toBe(f.simulation.x);
-  const expected = captureMotion(f.preview.simulation);
+  const accepted = { x: f.simulation.x, y: f.simulation.y };
   expect(f.preview.confirm({ sourceId: "another-mob" })).toBe(false);
   expect(
     f.prediction.applyDiverts([
-      { source: "hit", sourceId: "mob", vx: 270, vy: -270 },
+      { id: 1, skillId: 0, source: "hit", sourceId: "mob", vx: 270, vy: -270 },
     ]),
-  ).toBe(0);
-  expect(captureMotion(f.simulation)).toEqual(expected);
+  ).toBe(1);
+  expect(f.simulation.x).toBe(accepted.x);
+  expect(f.simulation.y).toBe(accepted.y);
+  expect(f.simulation.vx).toBe(270);
+  expect(f.simulation.vy).toBe(-270);
   expect(f.preview.sourceId).toBeNull();
 });
 
@@ -99,7 +105,7 @@ test("a different admitted hit vector replaces the preview instead of keeping a 
   f.prediction.predict(f.held, true);
   expect(
     f.prediction.applyDiverts([
-      { source: "hit", sourceId: "mob", vx: -270, vy: -270 },
+      { id: 1, skillId: 0, source: "hit", sourceId: "mob", vx: -270, vy: -270 },
     ]),
   ).toBe(1);
   expect(f.preview.sourceId).toBeNull();

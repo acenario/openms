@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { assertion, failureDetails, measureStage } from "../native-evidence.js";
 import { onlineIdentity } from "./online-lifecycle.js";
 import { participant, focusGame } from "./online-ui-repairs.js";
+import { reconnect } from "./online-latency.js";
 import { login } from "./online-recycling-scrolls.js";
 import {
   observeInputResponse,
@@ -54,7 +55,7 @@ async function hold(page, key, network, stall = false) {
   const started = await page.evaluate(() => performance.now());
   await page.keyboard.down(key);
   await pause(1500);
-  if (stall) network.stall(1500);
+  if (stall) network.stall(1500, "up");
   await pause(2500);
   await page.keyboard.up(key);
   const ended = await page.evaluate(() => performance.now());
@@ -159,6 +160,7 @@ export async function runWalkMotion({
     );
     await collectMotion(page, report, { output, url });
     if (!baseline) verify(report);
+    if (scope === "walk") await verifyReconnect(page, report);
     report.status = "pass";
   } catch (error) {
     report.status = "fail";
@@ -186,6 +188,18 @@ async function collectMotion(page, report, { output, url }) {
       ? report.holds.map((entry) => analyze(probe.rows, entry))
       : [];
   report.recovery = recovery(probe.rows);
+  const accepted = report.wire.at(-1);
+  const last = probe.rows.at(-1);
+  report.acceptance = {
+    acknowledgements: accepted.ackInputSeq - report.wire[0].ackInputSeq,
+    distance: Math.hypot(
+      accepted.motion.x - last.kernelX,
+      accepted.motion.y - last.kernelY,
+    ),
+    corrections: last.corrections - probe.rows[0].corrections,
+    replayedTicks: last.replayedTicks - probe.rows[0].replayedTicks,
+    epochs: new Set(probe.rows.map((row) => row.motionEpoch)).size,
+  };
   report.contact = analyzeContact(probe.rows);
   if (report.scope === "response") {
     report.responses = analyzeInputResponse(probe.rows, probe.edges);
@@ -268,7 +282,32 @@ function analyzeContact(rows) {
   return { floatingFrames, maximumGap, airborneFrames };
 }
 
+async function verifyReconnect(page, report) {
+  const before = await page.evaluate(() => window.maple.snapshot().simulation);
+  await measureStage(report.timings, "reconnect", () => reconnect(page));
+  const after = await page.evaluate(() => window.maple.snapshot().simulation);
+  report.reconnectError = Math.hypot(before.x - after.x, before.y - after.y);
+  assertion(report.reconnectError < 0.001, "Reconnect lost accepted movement");
+}
+
 function verify(report) {
+  assertion(
+    report.acceptance.acknowledgements > 100,
+    "Server did not accept movement",
+  );
+  assertion(
+    report.acceptance.distance < 0.001,
+    "Server did not reach the local endpoint",
+  );
+  assertion(
+    report.acceptance.corrections === 0 &&
+      report.acceptance.replayedTicks === 0,
+    "Ordinary movement was reconciled",
+  );
+  assertion(
+    report.acceptance.epochs === 1,
+    "Ordinary movement reset its stream",
+  );
   if (report.scope === "response") verifyInputResponse(report.responses);
   for (const walk of report.scope === "walk" ? report.analysis : []) {
     assertion(walk.frames >= 80, "Insufficient steady walking frames");

@@ -13,6 +13,7 @@ class PeerMoveQueue {
     this.signature = null;
     this.relocation = null;
     this.overflows = 0;
+    this.tick = -1;
   }
 
   record(actor, tick) {
@@ -29,7 +30,8 @@ class PeerMoveQueue {
       this.head = this.count = 0;
       snap = true;
     }
-    entity.tick = tick;
+    this.tick = Math.max(this.tick + 1, tick);
+    entity.tick = this.tick;
     entity.durationMs = snap ? 0 : PROTOCOL.TICK_MS;
     entity.moveType = snap ? 3 : 0;
     this.entries[(this.head + this.count) % CAPACITY] = entity;
@@ -46,14 +48,19 @@ class PeerMoveQueue {
   }
 }
 
+/** Retain each accepted quantum, including intermediate contacts in delayed bursts. */
+export function recordPeerMove(actor, field) {
+  if (actor.peerMoveQueue?.epoch !== field.epoch) {
+    actor.peerMoveQueue = new PeerMoveQueue(field.epoch);
+  }
+  actor.peerMoveQueue.record(actor, field.tick);
+}
+
 /** Record all actors before selecting a bounded publication; a crowded field must retain
  * intermediate landing/ladder samples, not replace them with a newer endpoint. */
 export function collectPeerMoves(actors, field) {
   for (const actor of actors) {
-    if (actor.peerMoveQueue?.epoch !== field.epoch) {
-      actor.peerMoveQueue = new PeerMoveQueue(field.epoch);
-    }
-    actor.peerMoveQueue.record(actor, field.tick);
+    recordPeerMove(actor, field);
   }
   const entries = [];
   const rounds = Math.ceil(PROTOCOL.MAX_PEER_MOTIONS / actors.length);

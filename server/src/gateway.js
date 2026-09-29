@@ -1,3 +1,4 @@
+import { resetMovementStream } from "./movement-stream.js";
 import {
   PROTOCOL,
   decodeClient,
@@ -486,6 +487,7 @@ export class GameplayGateway {
       throw protocolError("RATE_LIMITED");
     }
     socket.data.resyncAt = Date.now();
+    resetMovementStream(socket.data.actor);
     this.publications.snapshot(socket.data.actor);
   }
 

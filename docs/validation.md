@@ -6,6 +6,7 @@ Read a result together with its **source/catalog identity, fixture, action and l
 
 | Area                                   | Evidence                                                                                                             | Scope                                                                                                  |
 | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Client-driven movement | [Validation without ordinary reconciliation](#client-driven-movement-validation) | 2,000 ms RTT local walking/Flash Jump, upstream stall, accepted endpoints and reconnect; peer replay at 500 ms RTT. |
 | Online 100% movement                   | [Movement parity](movement-parity.md#scoped-verification)                                                            | Shared-kernel/server steps, browser prediction and checkpoint continuation.                             |
 | Slow-network gameplay                 | [Latency repair](#slow-network-gameplay-repair) | 500 ms RTT, delayed map assets, native walking/dialogue/travel and reconnect. |
 | Optimistic client and queued actions | [Queue and authority checks](#optimistic-client-and-queued-actions) | Immediate combat, two queued casts and inventory moves at 500 ms RTT, authoritative settlement and reconnect. |
@@ -35,6 +36,69 @@ Read a result together with its **source/catalog identity, fixture, action and l
 | Documentation                          | [Maintenance and checks](documentation-guide.md)                                                                     | Source links/routes, current constants, readable navigation and rendered diagrams.                     |
 
 Reports above retain the build they actually measured. A later source edit does not retroactively refresh their results.
+
+## Client-driven movement validation
+
+On **2026-09-30**, the reported repeated position pullbacks were addressed by replacing
+ordinary checkpoint restoration/replay with [client-driven movement and server validation](client-driven-movement.md).
+The client keeps its own 30 ms movement/render clock. The server reproduces reported steps
+from its last accepted state under an elapsed-time budget; invalid endpoints never become
+shared-world positions. Native local/remote controller evidence is in [the investigation](native-lag-handling.md).
+No original server implementation or Windows runtime comparison was available.
+
+Three scoped browser runs reused generated assets and isolated fixture accounts:
+
+| Workload | Observed result |
+| --- | --- |
+| Walking, 2,000 ms RTT; right/left/right, with a 1.5-second upstream-only stall | 562 acknowledged steps, zero ordinary corrections or replayed ticks, one movement epoch, exact accepted endpoint and exact settled reconnect position. No backward or paused frames in any hold. Steady RMS speed errors: 0, 1.604 and 0 px/s. |
+| Five Flash Jumps, 2,000 ms RTT | All five committed and produced local artwork. Across 799 frames: zero local tick regressions, unavailable prediction, loading or history overflow; longest held kernel tick 33.4 ms. Observed frame interval p95 16.8 ms. |
+| Two-player walking/jumping, 500 ms RTT and 450 ms traffic pause | Buffered replay reached 15 samples; 73 exhausted-path frames held with zero displacement, zero recovery snaps and maximum rendered frame step 10.198 px. Observer reconnect restored the settled peer. |
+
+Reproduce using `bun server/tools/check-skill-motion.js --scope walk --round-trip-ms 2000 --output /tmp/openms-client-driven-walk`,
+the same tool with `--scope skills`, and `bun server/tools/check-remote-motion.js --scope players --output /tmp/openms-client-driven-peers`.
+The high-ping skill workload waits for the existing receipt-bound command queue between casts;
+it does **not** establish rapid skill-command throughput. An initial rapid-cast probe exposed
+the existing two-second unsent-command expiry. Another probe committed all five casts but
+its old artwork counter observed only suppressed server echoes; the corrected counter
+observes local artwork. The first peer probe also misclassified the final interpolation
+quantum as extrapolation; the corrected check measures holding after the queue drains and
+that final quantum completes. These probe failures and their limits are not hidden by the
+passing scoped workloads.
+
+Measured stages (milliseconds; setup stages and scenario stages are separate, not summed):
+
+| Stage | Walking | Skills | Peers |
+| --- | ---: | ---: | ---: |
+| Database/content; seed | 287; 92 | 263; 92 | 318; 197 |
+| Server; frontend startup | 1,121; 1,875 | 1,132; 1,860 | 1,099; 1,875 |
+| Browser acquisition | 439 | 433 | 453 |
+| Identity | 4,423 | Included in readiness | 1,423 |
+| Readiness | 36,889 | 36,845 | 19,321 mover; 17,975 observer |
+| Action | 16,832 plus 2,503 warmup | 13,661 | 3,356 |
+| Reconnect | 8,604 | Not requested | 2,478 |
+| Context; fixture teardown | 21; 142 | 24; 138 | 69; 131 |
+
+Recorded source identities:
+
+- Walking: source `53ed53b85c146e4e4f08d8dea4ff5a003f6a2e3f441dd8be6ba933c5f6362167`, build `9ad604c264625522a97d24ea466f7f1c2c99d62c434b8ddc669e283c02fb2e50`.
+- Skills: source `fdbe2ac18411b3e1d47a9fb3af042a6c9b82c1c3a5f078f18f836caa131c6a9e`, build `7a09ddec5b9345a9dff542eb66cdd30164049c0c63a4e5f590dcdae17e650913`.
+- Peers: source `7af468eada0e30d8b93eb7f291f44f15bf95a7206fde3896baa52b4fb4766d27`, build `7ea01e2e306b430ace9a5687e54bf79441882bc113d5bec06cf47ba7b4c6a680`.
+- Walking/skills rules `8c446cfc764df8dcc2be091156a36c4441769b8218b66d127cf8479038a25958`; peer rules `80b8fc968aa495ad691cb7b2052b799fb4b86dd3e81c51ae7590b45d86d04de0` include the baseline peer path cursor added afterward.
+- All three used catalog `bf4d12c856304ed77c55a1296dcd7bf82d11f2bea505e111c517ae1b1e482af4` and asset build `11be20f84c507b5d85eba2fbdbd91f06c6b591922b11bad32ad0d02d3a16a939`.
+
+Focused deterministic checks passed 193 tests across 22 affected files, covering delayed
+jumps, forged positions/velocities, elapsed-time and backlog bounds, reconnect gravity,
+issued ability versions, one-use impulses, cast ordering, closed wire records, local
+rendering and peer playback. The final field-transfer cursor guard was unit-tested after
+the peer browser run. Changed JavaScript passes formatting/lint, the guarded browser build
+passes, and whitespace checking is clean. Documentation checking retains 881 existing
+failures with no added failures. Raw reports and logs remain outside the repository.
+
+Tolerance is finite: at most 128 unconfirmed 30 ms steps, explicit recovery on exhaustion,
+and server-owned relocation/death/denied actions still intervene. Combat does not rewind the
+world. These runs establish the named workloads, not every skill/map, unlimited lag,
+production anti-cheat completeness or subjective native-client equivalence. Client and
+server must restart together with the matched wire/build identity.
 
 ## Optimistic client and queued actions
 

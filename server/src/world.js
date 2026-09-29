@@ -9,7 +9,6 @@ import {
 import {
   createHeldInput,
   assignHeldInput,
-  stepMotion,
   captureMotion,
 } from "../../shared/motion.js";
 import { collectPeerMoves } from "./peer-move-stream.js";
@@ -85,9 +84,14 @@ import {
   takeMotionDiverts,
 } from "./field-diverts.js";
 import { serverOwnsPosition, combatMotionOwner } from "./motion-authority.js";
+import {
+  enqueueMovement,
+  advanceMovementStream,
+  movementStreamView,
+} from "./movement-stream.js";
 import { MotionWatchdog } from "./watchdog.js";
 import { DamageWatchdog } from "./damage-watchdog.js";
-import { retainAttackInput, resetAttackInput } from "./attack-input.js";
+import { resetAttackInput } from "./attack-input.js";
 
 const MAX_FIELDS = 128;
 const MAX_ACTORS = 128;
@@ -102,10 +106,6 @@ const NEUTRAL = Object.freeze({
   attack: false,
 });
 const CANCEL_SKILLS = Object.freeze({ kind: "skill.cancel" });
-
-function retireInput(actor, message) {
-  actor.ackInputSeq = Math.max(actor.ackInputSeq ?? 0, message.inputSeq);
-}
 
 function prepareNpcs(manifest, randomUint) {
   const npcs = new Map();
@@ -133,14 +133,6 @@ function prepareNpcs(manifest, randomUint) {
   return npcs;
 }
 
-/** Explicit server relocations are not comparable to an earlier client preview. */
-function reportComparable(actor, sim) {
-  if (actor.state !== "active" || actor.retiring || actor.deliveryError) {
-    return false;
-  }
-  return !serverOwnsPosition(actor, sim);
-}
-
 /** Discrepancy between a reported motion and the state it is compared against.
  *  Returns null for non-finite reports, which are refused without a watchdog verdict. */
 function motionExcess(state, motion, allowedPosition) {
@@ -166,41 +158,6 @@ function resumableResume(actor, motion) {
     Number.isFinite(motion.vx) &&
     Number.isFinite(motion.vy)
   );
-}
-
-function inspectReportedMotion(world, actor, sample) {
-  const motion = sample.motion;
-  const sim = actor.simulation;
-  if (!motion || !sim) return;
-  if (!reportComparable(actor, sim)) return;
-  const elapsedMs =
-    Math.max(0, sample.targetTick - actor.lastAdoptedTick) * PROTOCOL.TICK_MS;
-  const excess = motionExcess(sim, motion, plausiblePositionPx(elapsedMs));
-  if (!excess) return;
-  const verdict = world.watchdog.review(actor.id, sample.targetTick, excess);
-  if (verdict.decision === "fault") {
-    world.faultMotion(actor, { ...excess, elapsedMs, verdict });
-    return;
-  }
-  // A report never changes the trusted kernel. Validation is the server's own
-  // input simulation; the optional watchdog only adds abuse evidence.
-  actor.lastAdoptedTick = sample.targetTick;
-}
-
-function consumeActorInput(world, actor) {
-  const sample = actor.inputQueue.get(actor.field.tick);
-  actor.input.jumpPressed = false;
-  actor.input.attackPressed = false;
-  if (sample) {
-    actor.inputQueue.delete(actor.field.tick);
-    actor.currentInputSeq = sample.inputSeq;
-    assignHeldInput(actor.input, sample);
-    inspectReportedMotion(world, actor, sample);
-    actor.ackInputSeq = Math.max(actor.ackInputSeq ?? 0, sample.inputSeq);
-    actor.lastInputTick = actor.field.tick;
-  } else if (actor.field.tick - actor.lastInputTick > 3) {
-    assignHeldInput(actor.input, NEUTRAL);
-  }
 }
 
 function activationOperation(actor) {
@@ -485,25 +442,7 @@ export class OnlineWorld {
       throw protocolError("INVALID_MESSAGE");
     }
     actor.inputSeq = message.inputSeq;
-    retainAttackInput(actor, message);
-    const tick = actor.field.tick;
-    if (message.targetTick <= tick) {
-      retireInput(actor, message);
-      return;
-    }
-    if (message.targetTick > tick + PROTOCOL.INPUT_LEAD_TICKS) {
-      // Clock jitter or a paused server can make a valid client estimate early.
-      // Retire it without advancing simulation or revoking a healthy session.
-      retireInput(actor, message);
-      return;
-    }
-    if (
-      actor.inputQueue.has(message.targetTick) ||
-      actor.inputQueue.size >= PROTOCOL.INPUT_LEAD_TICKS
-    ) {
-      throw protocolError("RATE_LIMITED");
-    }
-    actor.inputQueue.set(message.targetTick, message);
+    enqueueMovement(actor, message);
   }
 
   /** Retain bounded diagnostic lines keyed to an attack. Only a matching server
@@ -609,6 +548,7 @@ export class OnlineWorld {
       this.publish(actor, {
         type: "motion",
         fieldEpoch: field.epoch,
+        ...movementStreamView(actor),
         ackInputSeq: actor.ackInputSeq,
         motion: captureMotion(actor.simulation),
         paused: field.paused,
@@ -627,7 +567,6 @@ export class OnlineWorld {
     if (actor.state !== "active" || actor.retiring || actor.deliveryError) {
       return;
     }
-    consumeActorInput(this, actor);
     if (actor.state !== "active" || actor.profile.hp <= 0) {
       this.neutralize(actor);
     }
@@ -648,13 +587,24 @@ export class OnlineWorld {
       actor.skills.derived(),
     );
     const previous = actor.simulation.action;
-    stepMotion(actor.simulation, actor.input);
+    advanceMovementStream(this, actor);
     if (previous !== actor.simulation.action) {
       actor.actionStartTick = actor.field.tick;
     }
     actor.profile.location.x = actor.simulation.x;
     actor.profile.location.y = actor.simulation.y;
     actor.profile.location.facing = actor.simulation.facing;
+  }
+
+  /** Exhausted movement time is a recoverable connection failure, not cheat evidence. */
+  expireMovement(actor) {
+    this.neutralize(actor);
+    this.publish(actor, {
+      type: "closing",
+      code: "RESYNC_REQUIRED",
+      retryAfterMs: 0,
+    });
+    actor.connection?.close(1012, "RESYNC_REQUIRED");
   }
 
   /** Optional abuse enforcement; server motion and client correction are independent. */
