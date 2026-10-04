@@ -103,6 +103,8 @@ Native exclusion helpers `004f0d45/004f0d64`, temporary authored HP/MP secondary
 
 `hooks.onRecovery(amount,simulation)` forwards HP only to `CombatPresentation.onRecovery`. Revival is a separate UI/map transition, not a natural-recovery timer.
 
+Online, `AuthorityCombat.finishActor` runs this same `PassiveRecovery` once per server field quantum against the server's map manifest; the client does not predict it and shows the delivered profile. `bun test server/test/natural-recovery.test.js` covers standing HP10/MP3 at the 334th quantum, moving MP-only, dead and capped actors, and the `info/recovery` 2 multiplier on 105040401.
+
 The online authority uses the same independent MP timer while sitting on a chair or map seat, including at full HP. MP changes appear in the MP bar without floating recovery numbers. The focused `bun server/tools/check-chair.js --output /tmp/openms-chair` scenario uses an owned chair through native inventory input, checks MP recovery with full HP and preservation after reconnect, and checks the project-bar player count as another participant disconnects. It also checks the bar at 1280×800 and 800×600; existing extracted assets are reused.
 
 ## Player world name

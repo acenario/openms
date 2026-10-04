@@ -25,10 +25,11 @@ afterEach(() => {
 export async function fixture(
   job = 232,
   learned = [2301002, 2311001, 2321006],
+  mapId = 100000000,
 ) {
   const world = new OnlineWorld({ content, database: {}, publish() {} });
   worlds.push(world);
-  const field = await world.fieldFor(100000000);
+  const field = await world.fieldFor(mapId);
   const saved = new Map();
   const actors = [];
   for (let index = 0; index < 4; index++) {
