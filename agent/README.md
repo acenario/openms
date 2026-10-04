@@ -1,43 +1,43 @@
 # Agent runtime (experimental)
 
-Browserless OpenMS players for AI agents. Agents sign in, create their own character, and play
-over the real game socket — no Chrome, no rendering. Built on the client's own
-`OnlineTransport`, `OnlinePrediction`, motion kernel and `AvatarVisuals`; nothing is ported.
+Browserless OpenMS players for AI agents. Agents sign in, create their own character and play over the
+real game socket — no Chrome, no rendering — built on the client's own `OnlineTransport`,
+`OnlinePrediction`, motion kernel and `AvatarVisuals`. Two Claude agents (Lumen and Wayfinder) built and
+use this together, coordinating file edits with lock files and teaching each other in game chat.
 
 | File | Role |
 | --- | --- |
-| `socket-client.js` | Sign in (hashcash) and play over `/api/v1/play` using the client's transport + predictor, driven by virtual keys |
-| `agent.js` | Agent body: reflex loop, local goal endpoint, event + episode logs, auto-reconnect |
-| `create.js` | Deliberate character creation: options → preview sheets → look check → register, roll, create |
-| `render.js` | Headless avatar renderer (client composition + PNG atlases) for look checks |
+| `agent.js` | **Body**: socket, supervisor/reconnect, HTTP port, logs (JSONL + Postgres mirror). Hot-reloads `brain.js` without dropping the socket. |
+| `brain.js` | **Brain** (hot-reloaded on save): perception, goals (follow, goto, travel, climb, perch, hunt, loot, talk/reply, command), reflexes (vitals: Recovery → potions → retreat to a rope), NPC dialogue reading, map context, HTTP API. |
+| `socket-client.js` | Sign in (hashcash) and play over `/api/v1/play`, virtual keys, transition handshake. |
+| `create.js` | Deliberate character creation: options → preview sheets → look check → register, roll, create. |
+| `render.js` | Headless avatar/NPC renderer (client composition + PNG atlases). |
+| `atlas.js` | Map context, NPC portraits, portal routes from the generated catalog. |
+| `vault.js` | Generates an Obsidian vault of world knowledge (maps, NPCs, quests, mobs, items) — no model. |
+| `memory.js` + `sql/` | Agent memory in Postgres schema `agent` (agents, episodes, events, lessons, messages) and `who`/`find` players. |
+| `quests.js`, `questlog.js`, `converse.js`, `drill.js` | Quest availability verdicts, quest log, one-command quest conversations, movement drills (by Wayfinder). |
 
-Requires a running dev server and client (`bun run server:dev`, `bun run client:dev`) with
-extracted assets.
+Requires the dev server and client (`bun run server:dev`, `bun run client:dev`) with extracted assets and
+PostgreSQL (for `memory.js`, apply with `bun agent/memory.js migrate`).
 
 ```sh
-bun agent/create.js --name Lumen --options
-bun agent/create.js --name Lumen --preview            # agent/logs/creator/<Gender>-<field>.png
-bun agent/create.js --name Lumen --look --build '{"gender":"Female","hairBase":"Connie Hair","hairColor":"Blond"}'
-bun agent/create.js --name Lumen --build '{...same...}' --favor int
-bun agent/agent.js --name Lumen                       # goals on http://127.0.0.1:3310
-
-curl -X POST localhost:3310/goal -d '{"type":"say","text":"hi"}'
-curl -X POST localhost:3310/goal -d '{"type":"follow","name":"SomePlayer"}'
-curl localhost:3310/state
+bun agent/create.js --name Lumen --preview                  # agent/logs/creator/*.png
+bun agent/create.js --name Lumen --build '{"gender":"Female","hairBase":"Connie Hair","hairColor":"Blond"}' --favor int
+bun agent/agent.js --name Lumen --port 3310                 # body; edit brain.js live
+curl localhost:3310/context                                 # the map in plain language
+curl -X POST localhost:3310/goal -d '{"type":"travel","map":30000}'
+curl -X POST localhost:3310/goal -d '{"type":"talk","npc":"Todd"}'
+bun agent/memory.js who                                     # online characters and maps
+bun agent/vault.js                                          # world knowledge vault
 ```
 
-Logs: `agent/logs/events.jsonl` (chat, arrivals, hurt, map, online/offline — what the LLM layer
-watches), `episodes.jsonl` (one record per goal attempt with metrics and a behaviour-version
-hash, for self-improvement), `protocol-trace.jsonl` (frames before a protocol close).
-
 Notes for headless clients:
-
-- Three browser touchpoints are shimmed: `fetch` (cookie jar + `Origin`), `location`, and the
-  WebSocket (cookie + `Origin` headers). The compiled asset-identity check is bypassed; an
-  upstream version should inject `{fetch, WebSocket, baseUrl, identity}` into `OnlineTransport`.
-- The server needs a 30 ms input stream even when idle, or it closes with `RESYNC_REQUIRED`.
-- A same-field refresh snapshot (a peer joined/left) must not reinstall prediction — that rewinds
-  `targetTick` and the server closes with `INVALID_MESSAGE` (the browser's
-  `refreshesInstalledField()` does the same).
-- Stat rolls are rate-limited (~3/s per session) and only the latest roll is kept.
-- `credentials.json` and `logs/` are git-ignored.
+- Shimmed browser touchpoints: `fetch` (cookie jar + `Origin`), `location`, WebSocket headers; the compiled
+  identity check is bypassed. Upstream, `OnlineTransport` should accept `{fetch, WebSocket, baseUrl, identity}`.
+- The server needs a 30 ms input stream even when idle (`RESYNC_REQUIRED` otherwise).
+- A same-field refresh snapshot must not reinstall prediction (rewinds `targetTick` → `INVALID_MESSAGE`).
+- Map changes need `transition-ready` after every `prepare` part. Server portal range is ~8 px.
+- Quest confirm screens: accept / final acknowledge send `quest.accept` / `quest.claim`, not `npc.answer`.
+- Keep attack presses ≥ 600 ms apart: more than 8 queued attack edges throws `RATE_LIMITED` inside the world
+  tick (fixed on branch `fix-actor-protocol-errors`).
+- `credentials.json`, `logs/`, `.locks/` and `knowledge/` are git-ignored.
