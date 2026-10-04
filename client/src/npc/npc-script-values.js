@@ -65,6 +65,11 @@ export const NPC_REMOTE_SERVICES = Object.freeze([
   "hall-of-fame-player-npc",
   "party-quest-progress",
   "custom-quest-progress",
+  "event-instance",
+  "quest-info-progress",
+  "skill-grant",
+  "field-population",
+  "random-outcome",
 ]);
 
 export const NPC_READ_TYPES = Object.freeze({

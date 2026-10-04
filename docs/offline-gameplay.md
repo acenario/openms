@@ -86,6 +86,17 @@ traps: a reached call fails the whole turn, rather than fabricating quest record
 or blocking an unrelated beginner branch. Advanced-job mutations are refused
 without changing the draft's published state.
 
+Kyrin's `scripts/npc/1090000.js` uses the same first-job transaction for job0→500
+(DEX20, gun1492000, knuckle1482000, bullets2330000×1000). Its other branches
+need server state OpenMS does not own, so they compile to the same lazy traps:
+`event-instance` (`getEventInstance`, `getEventManager` and calls on its result),
+`quest-info-progress` (`getQuestProgressInt`, `setQuestProgress`), `skill-grant`
+(`teachSkill`), `field-population` (`getPlayerCount`) and `random-outcome`
+(`Math.random()` comparisons). A comparison against one of these values traps
+before its other operand is lowered, and an `if` whose test traps compiles to
+that trap without lowering either branch. Focused regression source is
+`client/test/npc-pirate-advancement.test.js`.
+
 Focused regression source is `client/test/npc-thief-advancement.test.js`, with
 the retained complete authored script and source hash in its JSON fixture.
 The focused Bun run passes **5 tests / 50 assertions**, including the actual
