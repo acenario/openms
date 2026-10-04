@@ -1,5 +1,7 @@
 // Original008d379c/008d549f; ordinary input is70 printable ASCII characters.
-export const CHAT_LIMIT = 70;
+// Fork policy (not original): allow longer messages for agent and player conversation.
+// The protocol's text bound (shared/schema.js) still caps a message at 256 characters.
+export const CHAT_LIMIT = 200;
 export const CHAT_RATE_LIMITS = Object.freeze({
   repeat: 30000,
   flood: 2000,

@@ -7,8 +7,9 @@ import {
 } from "pixi.js";
 import { loadVisualBundle } from "./visual-resources.js";
 import { check } from "./stream-network.js";
+// 008d379c / 004ca25d bound the original edit length; bubbles follow the client limit.
+import { CHAT_LIMIT } from "../social/chat-rules.js";
 
-const CHAT_LIMIT = 70; // 008d379c / 004ca25d, ordinary edit length.
 const NAME_LIMIT = 13;
 const MAX_TEXT_UNITS = CHAT_LIMIT + NAME_LIMIT + 3;
 const FIRST_PRINTABLE = 0x20;

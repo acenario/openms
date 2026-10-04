@@ -297,7 +297,7 @@ export class UIChat {
       return { accepted: false, reason: "chat-blocked" };
     }
     if (typeof text !== "string" || text.length > CHAT_LIMIT) {
-      this.owner.status("Chat is limited to 70 characters.");
+      this.owner.status(`Chat is limited to ${CHAT_LIMIT} characters.`);
       return { accepted: false, reason: "chat-length" };
     }
     if (!validChannelIndex(channelIndex)) {
