@@ -19,6 +19,7 @@ import {
   revision,
   seq,
   text,
+  chatText,
   u32,
   union,
   validate,
@@ -290,7 +291,12 @@ const CORE_ACTION_ROWS = [
   [
     "chat.send",
     "social",
-    { channel, recipientId: optional(id), text, ...SOCIAL_CHAT_ACTION_FIELDS },
+    {
+      channel,
+      recipientId: optional(id),
+      text: chatText,
+      ...SOCIAL_CHAT_ACTION_FIELDS,
+    },
   ],
 ];
 const ACTION_ROWS = [
@@ -806,7 +812,7 @@ export const domainEventSchema = union("kind", {
     senderId: id,
     senderName: string(/^[\s\S]*$/u, 32),
     channel,
-    text,
+    text: chatText,
   }),
   trade: record(
     {
