@@ -19,6 +19,17 @@ const PARTY_QUEST_CALLS = new Set([
   "removePartyQuestItem",
   "setPartyQuestItemObtained",
 ]);
+// Server state without local authority: event instances, numbered quest info
+// progress, direct skill grants and other characters' field population.
+const UNAVAILABLE_CALLS = Object.freeze({
+  getEventInstance: "event-instance",
+  getEventManager: "event-instance",
+  getQuestProgressInt: "quest-info-progress",
+  setQuestProgress: "quest-info-progress",
+  teachSkill: "skill-grant",
+  getPlayerCount: "field-population",
+});
+const REMOTE_RECEIVER_CALLS = Object.freeze(["size", "get", "startInstance"]);
 const GAME_CONSTANT_READS = Object.freeze({
   getHallOfFameMapid: "hall-of-fame-map",
   getSkillBook: "skill-book",
@@ -51,6 +62,9 @@ export function npcMissingQuestService(context, node) {
 export function npcRemoteService(node) {
   const method = cmMethod(node);
   if (method === "canSpawnPlayerNpc") return "hall-of-fame-player-npc";
+  if (Object.hasOwn(UNAVAILABLE_CALLS, method)) {
+    return UNAVAILABLE_CALLS[method];
+  }
   if (PARTY_QUEST_CALLS.has(playerMethod(node))) return "party-quest-progress";
   if (PARTY_CALLS.has(method) || playerMethod(node) === "getParty") {
     return "party-membership";
@@ -162,7 +176,9 @@ export function npcServiceExpression(context, scope, node) {
   const host = staticHostExpression(context, scope, node);
   if (host) return host;
   const service =
-    npcMissingQuestService(context, node) ?? npcRemoteService(node);
+    npcMissingQuestService(context, node) ??
+    npcRemoteService(node) ??
+    comparisonService(node);
   if (service) return { op: "unavailable", service };
   const collection = remoteCollectionExpression(context, scope, node);
   if (collection) return collection;
@@ -173,9 +189,24 @@ export function npcServiceExpression(context, scope, node) {
   return mapServiceExpression(node);
 }
 
+/** Comparing an unavailable value traps before its other operand is lowered. */
+function comparisonService(node) {
+  if (node.type !== "BinaryExpression") return null;
+  if (
+    call(node.left, "random") &&
+    node.left.arguments.length === 0 &&
+    node.left.callee.object.type === "Identifier" &&
+    node.left.callee.object.name === "Math"
+  ) {
+    // Server-side random selection has no authored local authority.
+    return "random-outcome";
+  }
+  return npcRemoteService(node.left);
+}
+
 function remoteCollectionExpression(context, scope, node) {
   if (
-    (call(node, "size") || call(node, "get")) &&
+    REMOTE_RECEIVER_CALLS.some((name) => call(node, name)) &&
     node.callee.object.type === "Identifier"
   ) {
     const binding = resolveVariable(context, scope, node.callee.object);

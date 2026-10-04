@@ -607,9 +607,14 @@ function controlStatement(context, work, node, scope) {
     };
   }
   if (node.type === "IfStatement") {
+    const test = compileExpression(context, scope, node.test);
+    // An unavailable test traps on arrival, so neither branch is reachable.
+    if (context.expressions[test]?.op === "unavailable") {
+      return { op: "unavailable", service: context.expressions[test].service };
+    }
     return {
       op: "if",
-      test: compileExpression(context, scope, node.test),
+      test,
       yes: childStatement(context, work, node.consequent),
       no: childStatement(context, work, node.alternate),
     };
