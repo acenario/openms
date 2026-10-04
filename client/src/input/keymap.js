@@ -275,6 +275,10 @@ const CODE_INDICES = Object.freeze({
   F12: 88,
   ControlRight: 89,
   AltRight: 90,
+  // macOS Command has no record on the native keyboard; like ControlRight it shares the
+  // left Control record, so Mac players can use it for whatever Control is bound to.
+  MetaLeft: 89,
+  MetaRight: 89,
   Numpad0: 11,
   Numpad1: 2,
   Numpad2: 3,

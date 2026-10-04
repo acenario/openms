@@ -65,6 +65,22 @@ test("both modifier sides share the native action without releasing each other's
   });
 });
 
+test("macOS Command shares the Control record but its shortcuts stay with the browser", () => {
+  withInput((input, canvas, windowTarget) => {
+    const command = new Event("keydown", { cancelable: true });
+    Object.assign(command, { code: "MetaLeft", repeat: false, metaKey: true });
+    canvas.dispatchEvent(command);
+    expect(command.defaultPrevented).toBe(true);
+    expect(input.state.attack).toBe(true);
+    const shortcut = new Event("keydown", { cancelable: true });
+    Object.assign(shortcut, { code: "KeyR", repeat: false, metaKey: true });
+    canvas.dispatchEvent(shortcut);
+    expect(shortcut.defaultPrevented).toBe(false);
+    key(windowTarget, "keyup", "MetaLeft");
+    expect(input.state.attack).toBe(false);
+  });
+});
+
 test("quickslot taps last one gameplay step without cancelling a real held key", () => {
   withInput((input, canvas, windowTarget) => {
     input.tap("attack");

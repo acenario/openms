@@ -31,8 +31,15 @@ function actionForCode(context, code) {
     : heldActionForCode(code, context.defaults);
 }
 
+/** Command's own press carries metaKey; other keys held with it stay browser shortcuts. */
+function commandCombination(event) {
+  return (
+    event.metaKey && event.code !== "MetaLeft" && event.code !== "MetaRight"
+  );
+}
+
 function press(context, event) {
-  if (event.defaultPrevented || event.metaKey) return;
+  if (event.defaultPrevented || commandCombination(event)) return;
   const index = PHYSICAL_CODES.indexOf(event.code);
   if (index < 0) return;
   const action = actionForCode(context, event.code);
