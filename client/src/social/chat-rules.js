@@ -1,7 +1,9 @@
 // Original008d379c/008d549f; ordinary input is70 printable ASCII characters.
-// Fork policy (not original): allow longer messages for agent and player conversation.
-// The protocol's text bound (shared/schema.js) still caps a message at 256 characters.
-export const CHAT_LIMIT = 200;
+// Fork policy (not original): allow long messages for agent and player conversation.
+// Must not exceed the protocol's chatText bound (shared/schema.js, 2000 characters).
+export const CHAT_LIMIT = 2000;
+// Speech bubbles stay readable: they show the start of a long message; the chat log keeps it all.
+export const BUBBLE_TEXT_LIMIT = 200;
 export const CHAT_RATE_LIMITS = Object.freeze({
   repeat: 30000,
   flood: 2000,

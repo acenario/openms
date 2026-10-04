@@ -7,11 +7,18 @@ import {
 } from "pixi.js";
 import { loadVisualBundle } from "./visual-resources.js";
 import { check } from "./stream-network.js";
-// 008d379c / 004ca25d bound the original edit length; bubbles follow the client limit.
-import { CHAT_LIMIT } from "../social/chat-rules.js";
+// 008d379c / 004ca25d bound the original edit length; the fork accepts longer chat and
+// a bubble shows at most BUBBLE_TEXT_LIMIT characters of it (the chat log keeps the rest).
+import { BUBBLE_TEXT_LIMIT, CHAT_LIMIT } from "../social/chat-rules.js";
 
 const NAME_LIMIT = 13;
-const MAX_TEXT_UNITS = CHAT_LIMIT + NAME_LIMIT + 3;
+const MAX_TEXT_UNITS = BUBBLE_TEXT_LIMIT + NAME_LIMIT + 3;
+
+/** The start of a long message, so a bubble never outgrows its screen space. */
+function bubbleText(text) {
+  if (text.length <= BUBBLE_TEXT_LIMIT) return text;
+  return `${text.slice(0, BUBBLE_TEXT_LIMIT - 3)}...`;
+}
 const FIRST_PRINTABLE = 0x20;
 const PRINTABLE_COUNT = 95;
 const DISPLAY_MS = 5000; // 00937495 / 00978b4f push 0x1388.
@@ -378,7 +385,8 @@ export class SpeechBubbles {
     }
     this.syncDensity(this.app.renderer.resolution);
     if (text !== this.text || senderName !== this.senderName) {
-      this.layoutText(senderName === null ? text : `${senderName} : ${text}`);
+      const shown = bubbleText(text);
+      this.layoutText(senderName === null ? shown : `${senderName} : ${shown}`);
       this.layoutSkin();
       this.text = text;
       this.senderName = senderName;

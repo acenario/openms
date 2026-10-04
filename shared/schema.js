@@ -82,7 +82,10 @@ export const coordinate = number(-1048576, 1048576, false);
 export const point = record({ x: coordinate, y: coordinate });
 export const id = string(/^[A-Za-z0-9_-]{1,64}$/, 64);
 export const hash = string(/^[a-f0-9]{64}$/, 64);
-export const text = { type: "text" };
+export const text = { type: "text", maxChars: 256, maxBytes: 1024 };
+// Fork policy: chat carries conversation between players and agents, so it gets its own,
+// larger bound; every other text field (names, notes, labels) keeps the default above.
+export const chatText = { type: "text", maxChars: 2000, maxBytes: 8000 };
 
 /** Reject lone surrogates rather than replacing them during UTF-8 encoding. */
 export function validUnicode(value) {
@@ -107,8 +110,12 @@ function validateNumber(value, schema) {
   );
 }
 
-function validateText(value) {
-  if (typeof value !== "string" || value.length > 512 || !validUnicode(value)) {
+function validateText(value, schema) {
+  if (
+    typeof value !== "string" ||
+    value.length > schema.maxChars * 2 ||
+    !validUnicode(value)
+  ) {
     return false;
   }
   for (let i = 0; i < value.length; i++) {
@@ -116,8 +123,8 @@ function validateText(value) {
     if (unit <= 0x1f || (unit >= 0x7f && unit <= 0x9f)) return false;
   }
   return (
-    [...value].length <= 256 &&
-    new TextEncoder().encode(value).byteLength <= 1024
+    [...value].length <= schema.maxChars &&
+    new TextEncoder().encode(value).byteLength <= schema.maxBytes
   );
 }
 
@@ -133,7 +140,7 @@ function validateScalar(value, schema) {
       validUnicode(value)
     );
   }
-  return schema.type === "text" && validateText(value);
+  return schema.type === "text" && validateText(value, schema);
 }
 
 function resolveSchema(value, schema) {
