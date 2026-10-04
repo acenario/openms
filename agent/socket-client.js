@@ -120,6 +120,7 @@ export async function connect({ name, game, onEvent = () => {}, onStatus = () =>
   const held = { left: false, right: false, up: false, down: false, jump: false, attack: false, jumpPressed: false };
   let prediction = null;
   let installedEpoch = null;
+  const transitions = new Map(); // transitionId -> prepare parts received
   const { transport, cred, characters, catalog, origin } = await signIn({ name, game, callbacks: {
     onStatus,
     onEvent,
@@ -133,6 +134,28 @@ export async function connect({ name, game, onEvent = () => {}, onStatus = () =>
       const world = await physics(snapshot.field.mapId);
       prediction.install(createSimulation(world, snapshot.self.entity.position), snapshot.serverTick);
       installedEpoch = snapshot.fieldEpoch;
+    },
+    // Map change handshake (browser: native-transitions.js). The server streams a "prepare"
+    // preview in N parts; once all arrive and the destination is loadable, the client must
+    // answer transition-ready or the transfer never commits.
+    onTransition: async (message) => {
+      if (message.phase !== "prepare") return;
+      const parts = message.preparation?.parts ?? 1;
+      const seen = (transitions.get(message.transitionId) ?? 0) + 1;
+      transitions.set(message.transitionId, seen);
+      if (seen < parts) return;
+      transitions.delete(message.transitionId);
+      let ok = true;
+      try {
+        await physics(message.destination.mapId);
+      } catch {
+        ok = false;
+      }
+      try {
+        transport.sendTransitionReady(message.transitionId, ok, message.sourceEpoch);
+      } catch {
+        // superseded transition (STALE_FIELD); the server's deadline resolves it
+      }
     },
   } });
   prediction = new OnlinePrediction({

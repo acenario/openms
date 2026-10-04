@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { connect, trace } from "./socket-client.js";
+import { atlas } from "./atlas.js";
 
 const { values: opts } = parseArgs({
   options: {
@@ -29,6 +30,10 @@ const VERSION = createHash("sha256")
 const TICK_MS = 50;
 const STUCK_TICKS = 16; // ~0.8 s without horizontal progress
 const NEAR_X = 50;
+const PORTAL_X = 8; // server checks its own (slightly lagging) copy of our position; 13 px was rejected
+const PORTAL_RETRY_MS = 1500;
+const PORTAL_TRIES = 6;
+const HOP_TIMEOUT_MS = 60000;
 const RELAUNCH_DELAY_MS = 5000;
 
 const log = (file, record) =>
@@ -74,6 +79,12 @@ function steer(held, dir) {
   held.left = dir === "left";
   held.right = dir === "right";
 }
+/** Down + jump drops through the current platform (original MapleStory down-jump). */
+function dropThrough(held) {
+  held.down = true;
+  jump(held);
+  setTimeout(() => (held.down = false), 150);
+}
 function jump(held) {
   held.jump = true;
   held.jumpPressed = true;
@@ -118,9 +129,9 @@ function track(world) {
   episode.lastSelf = world.self;
 }
 
-function approach(held, world, tx, ty) {
+function approach(held, world, tx, ty, near = NEAR_X) {
   const dx = tx - world.self.x;
-  if (Math.abs(dx) <= NEAR_X) {
+  if (Math.abs(dx) <= near) {
     steer(held, null);
     stuck.ticks = 0;
     return true;
@@ -140,8 +151,72 @@ function approach(held, world, tx, ty) {
   return false;
 }
 
-function act(held, world) {
+/** Walk the planned route: on each map, reach the exit portal and ask to enter it. */
+function travel(body, world) {
+  const held = body.held;
+  if (world.mapId === goal.map) return endEpisode("success", world);
+  const step = goal.plan.find((s) => s.map === world.mapId);
+  if (!step?.via) return endEpisode("failed", world, `off route on map ${world.mapId}`);
+  const hop = (goal.hop ??= { map: world.mapId, started: Date.now(), tries: 0, lastTry: 0 });
+  if (hop.map !== world.mapId) Object.assign(hop, { map: world.mapId, started: Date.now(), tries: 0, lastTry: 0 });
+  if (Date.now() - hop.started > HOP_TIMEOUT_MS) return endEpisode("timeout", world, `could not reach portal ${step.via.name} on ${step.name}`);
+  const at = approach(held, world, step.via.x, step.via.y, PORTAL_X);
+  const level = Math.abs(step.via.y - world.self.y) < 60;
+  if (at && !level && world.self.state === "ground" && Date.now() - stuck.lastJump > 800) {
+    // Lined up but on the wrong platform: drop through if the portal is below, jump if above.
+    stuck.lastJump = Date.now();
+    episode.metrics.jumps++;
+    if (step.via.y > world.self.y) (dropThrough(held), (episode.metrics.drops = (episode.metrics.drops ?? 0) + 1));
+    else jump(held);
+    return;
+  }
+  if (!at || !level || world.self.state !== "ground" || Date.now() - hop.lastTry < PORTAL_RETRY_MS) return;
+  if (body.transport.status !== "active") return; // commands are refused while synchronizing
+  if (hop.tries >= PORTAL_TRIES) return endEpisode("failed", world, `portal ${step.via.name} refused ${hop.tries}x (${episode.lastPortal})`);
+  hop.tries++;
+  hop.lastTry = Date.now();
+  episode.metrics.portalTries = (episode.metrics.portalTries ?? 0) + 1;
+  const ep = episode;
+  body.transport.command({ kind: "portal.enter", portalId: step.via.portalId }).then(
+    (r) => ((ep.lastPortal = r?.code ?? r?.status ?? r), console.log("[portal]", JSON.stringify(r))),
+    (e) => ((ep.lastPortal = e.code ?? e.message), console.log("[portal] error", e.code ?? e.message)),
+  );
+}
+
+/** Walk to a ladder/rope, hold up to grab and climb, keep holding to step off at the top. */
+function climb(body, world) {
+  const held = body.held;
+  const { ladder } = goal;
+  const onLadder = world.self.state !== "ground" && world.self.state !== "air";
+  if (world.self.y <= ladder.top + 4 && world.self.state === "ground") {
+    held.up = false;
+    return endEpisode("success", world);
+  }
+  if (Date.now() - episode.started > 20000) {
+    held.up = false;
+    return endEpisode("timeout", world, `stuck at ${world.self.x},${world.self.y} state ${world.self.state}`);
+  }
+  if (onLadder || held.up) {
+    steer(held, null);
+    held.up = true;
+    if (!onLadder && world.self.state === "ground" && Math.abs(world.self.x - ladder.x) > 10) held.up = false; // missed: re-approach
+    return;
+  }
+  if (!approach(held, world, ladder.x, world.self.y, 4)) return;
+  held.up = true;
+  // Ladder starts above us: jump while holding up to grab it (jump-grab).
+  if (ladder.bottom < world.self.y - 10 && Date.now() - stuck.lastJump > 700) {
+    stuck.lastJump = Date.now();
+    episode.metrics.jumps++;
+    jump(held);
+  }
+}
+
+function act(body, world) {
+  const held = body.held;
   track(world);
+  if (goal.type === "travel") return travel(body, world);
+  if (goal.type === "climb") return climb(body, world);
   if (goal.type === "follow") {
     const target = world.players.find((p) => p.name?.toLowerCase() === goal.name.toLowerCase());
     if (!target) {
@@ -172,6 +247,30 @@ function noticeChanges(world) {
   known = { players: names, mapId: world.mapId, hp: world.self.hp };
 }
 
+// ---------- map context: static map knowledge + live state, relative to me ----------
+const world = atlas(new URL(opts.game).origin);
+async function mapContext(live) {
+  const ctx = await world.context(live.mapId);
+  const me = live.self;
+  const rel = (o) => {
+    const dx = Math.round(o.x - me.x), dy = Math.round(o.y - me.y);
+    const side = Math.abs(dx) < 30 ? "here" : dx > 0 ? "right" : "left";
+    const level = Math.abs(dy) < 40 ? "same level" : dy < 0 ? "above" : "below";
+    return { ...o, dx, dy, where: `${Math.abs(dx)}px ${side}, ${level}` };
+  };
+  return {
+    map: `${ctx.name} (${ctx.mapId})`,
+    me,
+    players: live.players.map(rel),
+    npcs: ctx.npcs.map(rel),
+    exits: ctx.exits.map(rel),
+    mobsHere: live.mobs.length,
+    mobTypes: ctx.mobs,
+    ladders: ctx.ladders,
+    platformHeights: ctx.platformHeights,
+  };
+}
+
 // ---------- goal endpoint ----------
 function serve(live) {
   Bun.serve({
@@ -180,8 +279,12 @@ function serve(live) {
     async fetch(req) {
       const url = new URL(req.url);
       const body = live.body;
+      if (req.method === "GET" && url.pathname === "/context") {
+        if (!live.world) return Response.json({ ok: false, error: "not in world yet" }, { status: 503 });
+        return Response.json(await mapContext(live.world));
+      }
       if (req.method === "GET" && url.pathname === "/state")
-        return Response.json({ online: Boolean(body), goal, version: VERSION, world: live.world });
+        return Response.json({ online: Boolean(body), transport: body?.transport.status ?? null, goal, version: VERSION, world: live.world });
       if (req.method !== "POST" || url.pathname !== "/goal") return new Response("not found", { status: 404 });
       if (!body) return Response.json({ ok: false, error: "offline (reconnecting)" }, { status: 503 });
       const g = await req.json();
@@ -198,6 +301,22 @@ function serve(live) {
           body.held.down = true;
           setTimeout(() => (body.held.down = false), Math.min(Number(g.ms) || 800, 10000));
           return Response.json({ ok: true });
+        }
+        if (g.type === "climb") {
+          const ctx = await world.context(live.world.mapId);
+          const me = live.world.self;
+          const ladder = ctx.ladders
+            .filter((l) => me.y > l.top && me.y <= l.bottom + 90) // +90: reachable by jump-grab
+            .sort((a, b) => Math.abs(a.x - me.x) - Math.abs(b.x - me.x))[0];
+          if (!ladder) return Response.json({ ok: false, error: "no ladder reachable from here" }, { status: 400 });
+          startEpisode({ type: "climb", ladder }, live.world);
+          return Response.json({ ok: true, ladder });
+        }
+        if (g.type === "travel") {
+          const plan = await world.route(live.world.mapId, g.map);
+          if (!plan) return Response.json({ ok: false, error: `no route to map ${g.map}` }, { status: 400 });
+          startEpisode({ type: "travel", map: Number(g.map), plan: plan.steps }, live.world);
+          return Response.json({ ok: true, route: plan.steps.map((s) => `${s.name} via ${s.via?.name}`) });
         }
         if (!["follow", "goto", "idle", "stop"].includes(g.type))
           return Response.json({ ok: false, error: "unknown goal" }, { status: 400 });
@@ -241,7 +360,7 @@ async function lifetime(live) {
       if (world) {
         live.world = world;
         noticeChanges(world);
-        act(body.held, world);
+        act(body, world);
       }
       await Bun.sleep(Math.max(0, TICK_MS - (Date.now() - started)));
     }

@@ -100,13 +100,32 @@ export async function renderAvatar({ catalog, store, profile, frame = 0, backgro
     .filter((p) => !p.expression || p.expression === "default")
     .slice()
     .sort((a, b) => a.z - b.z); // same order as client/src/rendering/animation-timing.js
+  const image = await composite(parts, (id) => prepared.textures.get(id), store, background, prepared.bounds);
+  prepared.destroy();
+  return image;
+}
+
+/**
+ * Alpha-blend texture parts (already z-sorted) onto a background. texture(id) returns
+ * {x,y,width,height,atlasUrl}. Bounds default to the parts' own extent.
+ */
+export async function composite(parts, texture, store, background = [205, 221, 238, 255], bounds = null) {
+  if (!bounds) {
+    let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+    for (const p of parts) {
+      const t = texture(p.texture);
+      left = Math.min(left, p.x); top = Math.min(top, p.y);
+      right = Math.max(right, p.x + t.width); bottom = Math.max(bottom, p.y + t.height);
+    }
+    bounds = { left, top, width: right - left, height: bottom - top };
+  }
   const pad = 4;
-  const { left, top, width: w, height: h } = prepared.bounds;
+  const { left, top, width: w, height: h } = bounds;
   const width = w + pad * 2, height = h + pad * 2;
   const rgba = new Uint8Array(width * height * 4);
   for (let i = 0; i < rgba.length; i += 4) rgba.set(background, i);
   for (const part of parts) {
-    const t = prepared.textures.get(part.texture);
+    const t = texture(part.texture);
     const atlas = await store.getAtlas(t.atlasUrl);
     const ox = part.x - left + pad, oy = part.y - top + pad;
     for (let y = 0; y < t.height; y++) {
@@ -122,7 +141,6 @@ export async function renderAvatar({ catalog, store, profile, frame = 0, backgro
       }
     }
   }
-  prepared.destroy();
   return { width, height, rgba };
 }
 
