@@ -134,7 +134,7 @@ export const KEY_COORDINATES = Object.freeze([
   Object.freeze({ index: 82, x: 514, y: 66 }),
   Object.freeze({ index: 83, x: 514, y: 99 }),
   Object.freeze({ index: 84, x: 0, y: 0 }),
-  Object.freeze({ index: 85, x: 0, y: 0 }),
+  Object.freeze({ index: 85, x: 72, y: 198 }), // the drawn Windows/Command key
   Object.freeze({ index: 86, x: 0, y: 0 }),
   Object.freeze({ index: 87, x: 438, y: 27 }),
   Object.freeze({ index: 88, x: 472, y: 27 }),
@@ -275,10 +275,11 @@ const CODE_INDICES = Object.freeze({
   F12: 88,
   ControlRight: 89,
   AltRight: 90,
-  // macOS Command has no record on the native keyboard; like ControlRight it shares the
-  // left Control record, so Mac players can use it for whatever Control is bound to.
-  MetaLeft: 89,
-  MetaRight: 89,
+  // The native keyboard art draws a Windows key between Ctrl and Alt but no record backs it.
+  // Its physical position is macOS Command; both use the otherwise unused record 85, which
+  // starts unbound and can be assigned in Key Config like any other key.
+  MetaLeft: 85,
+  MetaRight: 85,
   Numpad0: 11,
   Numpad1: 2,
   Numpad2: 3,
