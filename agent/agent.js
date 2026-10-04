@@ -64,6 +64,10 @@ function perceive(body) {
       mp: m.self.mp,
       maxMp: m.self.maxMp,
       level: m.self.level,
+      job: m.self.job,
+      ap: m.self.ap,
+      sp: m.self.sp,
+      stats: m.self.stats,
     },
     players: list
       .filter((e) => e.kind === "player" && e.id !== selfId)
@@ -346,9 +350,27 @@ function talk(body, world) {
   );
 }
 
+const RECOVERY = 1001;
+const RECOVERY_AT = 0.7; // cast when HP falls below 70%
+/** Survival reflex, independent of the goal: heal with Recovery when hurt. */
+function survive(body, world) {
+  const t = body.transport;
+  const skill = t.progress?.skills?.find((k) => k.id === RECOVERY && k.rank > 0);
+  if (!skill || live.dialogue || t.status !== "active") return;
+  if (world.self.hp >= world.self.maxHp * RECOVERY_AT) return;
+  if ((skill.cooldownUntil ?? 0) > Date.now() || Date.now() - (live.lastRecovery ?? 0) < 3000) return;
+  if (world.self.mp < 5 * skill.rank) return; // mpCon 5/10/15
+  live.lastRecovery = Date.now();
+  t.command({ kind: "skill.cast", skillId: RECOVERY }).then(
+    (r) => event({ kind: "reflex", action: "Recovery", hp: world.self.hp, result: r?.code ?? r?.status }),
+    () => {},
+  );
+}
+
 function act(body, world) {
   const held = body.held;
   track(world);
+  survive(body, world);
   if (goal.type === "talk") return talk(body, world);
   if (goal.type === "loot") return lootAll(body, world);
   if (goal.type === "hunt") return hunt(body, world);
@@ -431,8 +453,10 @@ function noticeChanges(world) {
     for (const n of known.players) if (!names.has(n)) event({ kind: "player-left", name: n });
     if (world.mapId !== known.mapId) event({ kind: "map", mapId: world.mapId });
     if (world.self.hp < known.hp * 0.7) event({ kind: "hurt", hp: world.self.hp, maxHp: world.self.maxHp });
+    if (world.self.level > known.level)
+      event({ kind: "level-up", level: world.self.level, ap: world.self.ap, note: "spend AP/skill points: GET /character, then POST /goal {type:\"command\",action:{kind:\"stats.allocate\"|\"skills.allocate\",...}}" });
   }
-  known = { players: names, mapId: world.mapId, hp: world.self.hp };
+  known = { players: names, mapId: world.mapId, hp: world.self.hp, level: world.self.level };
 }
 
 // ---------- NPC conversations: readable turns for the LLM ----------
@@ -525,6 +549,19 @@ function serve(live) {
         if (!live.world) return Response.json({ ok: false, error: "not in world yet" }, { status: 503 });
         return Response.json(await mapContext(live.world));
       }
+      if (req.method === "GET" && url.pathname === "/character") {
+        if (!body) return Response.json({ ok: false, error: "offline" }, { status: 503 });
+        const t = body.transport, c = await catalogNow(), self = t.model?.self;
+        const skillName = (id) => c.ui?.skills?.[String(id)]?.name ?? c.quests.strings.skill?.[String(id)] ?? null;
+        const skills = (t.progress?.skills ?? []).map((k) => ({ id: k.id, name: skillName(k.id), rank: k.rank, cooldownUntil: k.cooldownUntil }));
+        const beginnerRanks = skills.filter((k) => [1000, 1001, 1002].includes(k.id)).reduce((n, k) => n + k.rank, 0);
+        const items = (t.inventory?.items ?? []).map((i) => ({ uid: i.id, templateId: i.templateId, name: c.ui.items[String(i.templateId)]?.name?.trim(), tab: i.tab, slot: i.slot, quantity: i.quantity }));
+        return Response.json({
+          level: self?.level, job: self?.job, ap: self?.ap, sp: self?.sp, stats: self?.stats, hp: self?.hp, maxHp: self?.maxHp, mp: self?.mp, maxMp: self?.maxMp,
+          beginnerSkillPoints: self?.job % 1000 < 100 ? Math.min((self?.level ?? 1) - 1, 6) - beginnerRanks : null,
+          skills, effects: self?.effects ?? [], inventory: items, mesos: t.inventory?.mesos,
+        });
+      }
       if (req.method === "GET" && url.pathname === "/state")
         return Response.json({ online: Boolean(body), transport: body?.transport.status ?? null, goal, version: VERSION, world: live.world });
       if (req.method !== "POST" || url.pathname !== "/goal") return new Response("not found", { status: 404 });
@@ -587,6 +624,14 @@ function serve(live) {
           }
           const result = await body.transport.command(action, action.kind === "npc.answer" ? d.step : undefined);
           return Response.json({ ok: true, sent: action.kind, result: result?.code ?? result?.status ?? result });
+        }
+        // Raw game action for the LLM layer, admitted by the same server rules as the browser:
+        // {kind:"stats.allocate",stat,amount} {kind:"skills.allocate",skillId,amount}
+        // {kind:"skill.cast",skillId} {kind:"equipment.equip",itemId,slot} ...
+        if (g.type === "command") {
+          const result = await body.transport.command(g.action);
+          event({ kind: "command", action: g.action, result: result?.code ?? result?.status });
+          return Response.json({ ok: true, result: result?.code ?? result?.status ?? result });
         }
         if (g.type === "hunt") {
           startEpisode({ type: "hunt", limit: Number(g.limit) || 0 }, live.world);
