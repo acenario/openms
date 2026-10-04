@@ -7,6 +7,7 @@ const PRODUCTION_EVENTS = new Set([
   "socket.closed",
   "watchdog.fault",
   "motion.fault",
+  "actor.rejected",
   "checkpoint.failed",
   "simulation.suspended",
 ]);

@@ -538,7 +538,8 @@ export class OnlineWorld {
       throw protocolError("SERVER_BUSY");
     }
     field.tick++;
-    for (const actor of field.characters.values()) this.moveActor(actor);
+    for (const actor of field.characters.values())
+      this.moveActorIsolated(actor);
     advanceCombat(this, field);
     advanceDrops(this, field);
     advanceReactors(this, field, PROTOCOL.TICK_MS);
@@ -594,6 +595,32 @@ export class OnlineWorld {
     actor.profile.location.x = actor.simulation.x;
     actor.profile.location.y = actor.simulation.y;
     actor.profile.location.facing = actor.simulation.facing;
+  }
+
+  /**
+   * One client's protocol fault (for example more queued attack edges than the bound) ends
+   * that client's connection, never the shared simulation. Errors without a protocol code
+   * are server faults and still propagate to the lifecycle, which suspends the world.
+   */
+  moveActorIsolated(actor) {
+    try {
+      this.moveActor(actor);
+    } catch (error) {
+      if (typeof error?.code !== "string") throw error;
+      this.rejectActor(actor, error.code);
+    }
+  }
+
+  /** Close one connection for its own protocol fault; the character may reconnect. */
+  rejectActor(actor, code) {
+    this.neutralize(actor);
+    this.log?.("actor.rejected", {
+      character: actor.id,
+      map: actor.field?.mapId,
+      code,
+    });
+    this.publish(actor, { type: "closing", code, retryAfterMs: 0 });
+    actor.connection?.close(1008, code);
   }
 
   /** Exhausted movement time is a recoverable connection failure, not cheat evidence. */
