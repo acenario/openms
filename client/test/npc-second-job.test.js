@@ -20,8 +20,10 @@ const BASE_ITEMS = {
   1302000: { id: 1302000, descriptor: {}, info: { islot: "Wp" } },
 };
 
-function compile(npcId) {
-  const text = readFileSync(new URL(`npc/${npcId}.js`, ROOT), "utf8");
+function compile(
+  npcId,
+  text = readFileSync(new URL(`npc/${npcId}.js`, ROOT), "utf8"),
+) {
   const artifact = compileNpcScript({
     text,
     path: `scripts/npc/${npcId}.js`,
@@ -77,6 +79,8 @@ function character({ level = 30, job = 100, mapId = "102000003" } = {}) {
   const profile = createProfile({ mapId, x: 0, y: 0, facing: 1 });
   profile.level = level;
   profile.job = job;
+  // Cosmic 24-slot rows after the first-job +4; the fifth (cash) is untouched.
+  profile.inventorySlots = [28, 28, 28, 28, profile.inventorySlots[4]];
   return { items, travels: [], store: ProfileStore.memory(profile, { items }) };
 }
 
@@ -94,8 +98,8 @@ function respond(session, action, value) {
   });
 }
 
-function talk(owner, npcId) {
-  const artifact = compile(npcId);
+function talk(owner, npcId, text) {
+  const artifact = compile(npcId, text);
   for (const id of artifact.dependencies.itemIds) {
     owner.items[id] ??= { id, descriptor: {}, info: { slotMax: 100 } };
   }
@@ -184,4 +188,57 @@ test("a custom quest record cannot carry mob progress", () => {
   const profile = createProfile({ mapId: "102000003", x: 0, y: 0, facing: 1 });
   profile.quests[100003] = { state: 1, kills: { 100100: 1 } };
   expect(() => validateProfile(profile)).toThrow("quest 100003 kills");
+});
+
+const CHANGE = (job) =>
+  `function start() { cm.changeJobById(${job}); cm.dispose(); }`;
+
+test("a level-30 warrior becomes a fighter with pool-1 SP, warrior HP and a row per inventory", async () => {
+  const owner = character();
+  const before = structuredClone(owner.store.profile);
+  try {
+    expect((await talk(owner, 1022000, CHANGE(110)).start()).ok).toBe(true);
+    const profile = owner.store.profile;
+    expect(profile.job).toBe(110);
+    expect(profile.remainingSp).toEqual([0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+    expect(profile.remainingAp).toBe(before.remainingAp);
+    expect(profile.baseMaxHP).toBe(before.baseMaxHP + 300);
+    expect(profile.baseMaxMP).toBe(before.baseMaxMP);
+    expect(profile.inventorySlots).toEqual(
+      before.inventorySlots.map((slots, index) =>
+        index < 4 ? slots + 4 : slots,
+      ),
+    );
+  } finally {
+    await owner.store.destroy();
+  }
+});
+
+test("a magician 2nd job gains MP only and every invalid transition is refused", async () => {
+  const mage = character({ job: 200 });
+  try {
+    const before = structuredClone(mage.store.profile);
+    expect((await talk(mage, 1032001, CHANGE(230)).start()).ok).toBe(true);
+    expect(mage.store.profile.baseMaxMP).toBe(before.baseMaxMP + 450);
+    expect(mage.store.profile.baseMaxHP).toBe(before.baseMaxHP);
+  } finally {
+    await mage.store.destroy();
+  }
+  for (const [level, job, target] of [
+    [29, 100, 110], // below level 30
+    [30, 200, 110], // another class's 2nd job
+    [30, 0, 110], // beginner skipping 1st job
+    [30, 110, 120], // already advanced
+    [70, 110, 111], // 3rd job stays unavailable
+  ]) {
+    const owner = character({ level, job });
+    const before = structuredClone(owner.store.profile);
+    try {
+      const result = await talk(owner, 1022000, CHANGE(target)).start();
+      expect(result.ok).toBe(false);
+      expect(owner.store.profile).toEqual(before);
+    } finally {
+      await owner.store.destroy();
+    }
+  }
 });

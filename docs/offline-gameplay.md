@@ -90,8 +90,14 @@ with no record, mob counters, rewards or journal entry, so existing saves need
 no migration. Other source quests absent from the original Quest Check
 inventory (for example the 3rd-job 100200 family) remain explicit lazy
 `custom-quest-progress` traps: a reached call fails the whole turn, rather than
-fabricating quest records or blocking an unrelated beginner branch. Advanced-job mutations are refused
-without changing the draft's published state.
+fabricating quest records or blocking an unrelated beginner branch.
+Explorer 2nd-job changes (110/120/130, 210/220/230, 310/320, 410/420, 510/520)
+use the same transaction from exactly their level-30 first job: one SP into
+the new job's pool (`skillPointPool`, pool 1), 5 AP only with
+`USE_STARTING_AP_4`, +4 slots for the four item categories, and the reference
+`changeJob` HP300–350 (warriors), MP450–500 (magicians) or HP300–350/MP150–200
+(others). 3rd/4th-job and any other transition is refused without changing the
+draft's published state.
 
 Kyrin's `scripts/npc/1090000.js` uses the same first-job transaction for job0→500
 (DEX20, gun1492000, knuckle1482000, bullets2330000×1000). Its other branches

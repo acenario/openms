@@ -804,31 +804,58 @@ function authoredPortal(portal) {
   return portal;
 }
 
-/** Character.java:1141–1259; first explorer advancement only, server-reference/offline authority. */
-function jobEffect(turn, args) {
-  const profile = turn.profile,
-    job = npcInteger(args[0], 0, 32767);
+const FIRST_JOBS = new Set([100, 200, 300, 400, 500]);
+const SECOND_JOBS = new Set([
+  110, 120, 130, 210, 220, 230, 310, 320, 410, 420, 510, 520,
+]);
+
+/** Explorer first/second advancement only. Cosmic changeJob does not gate the
+ *  transition; its scripts do, so the authority refuses any other source job. */
+function requireJobTransition(profile, job) {
   requireNpc(
-    [100, 200, 300, 400, 500].includes(job),
+    FIRST_JOBS.has(job) || SECOND_JOBS.has(job),
     "This advancement requires unavailable advanced-job authority",
     "npc-dependency",
   );
+  if (FIRST_JOBS.has(job)) {
+    requireNpc(
+      profile.job === 0 && profile.level >= (job === 200 ? 8 : 10),
+      "First job advancement requires an eligible beginner",
+      "npc-job",
+    );
+    return;
+  }
   requireNpc(
-    profile.job === 0 && profile.level >= (job === 200 ? 8 : 10),
-    "First job advancement requires an eligible beginner",
+    profile.job === job - (job % 100) && profile.level >= 30,
+    "Second job advancement requires its level-30 first job",
     "npc-job",
   );
+}
+
+/** Character.java:1141–1259; explorer 1st/2nd advancement, server-reference/offline authority. */
+function jobEffect(turn, args) {
+  const profile = turn.profile,
+    job = npcInteger(args[0], 0, 32767);
+  requireJobTransition(profile, job);
   requireNpc(
     typeof args[1] === "boolean",
     "Invalid starting AP policy",
     "npc-value",
   );
   profile.job = job;
+  // changeJob:1154–1170: one SP into the new job's book (2nd job: OpenMS pool 1).
   profile.remainingSp[skillPointPool(job)] = npcInteger(
     profile.remainingSp[skillPointPool(job)] + 1,
     0,
   );
-  if (args[1]) profile.remainingAp = npcInteger(profile.remainingAp + 4, 0);
+  // changeJob:1172–1183: with USE_STARTING_AP_4 a 1st job gains 4 AP and an
+  // x10 2nd job 5; without it neither does.
+  if (args[1]) {
+    profile.remainingAp = npcInteger(
+      profile.remainingAp + (FIRST_JOBS.has(job) ? 4 : 5),
+      0,
+    );
+  }
   // Character.gainSlotsInternal:9157–9191 refuses an entire +4 above96; legacy saves are retained.
   for (let category = 0; category < 4; category++) {
     if (profile.inventorySlots[category] + 4 <= 96) {
