@@ -29,6 +29,7 @@ import { extractionRecipes } from "./extraction-recipes.js";
 import { extractionStage } from "./extraction-timings.js";
 import { resourceByteLimit } from "../src/assets/resource-validation.js";
 import { parseFlags, sourcePaths } from "./source-options.js";
+import { LIMITS } from "../src/rendering/stream-validation.js";
 
 const started = performance.now();
 const timings = {};
@@ -75,11 +76,11 @@ const selected = option(
 ).split(",");
 if (
   !selected.length ||
-  selected.length > 1024 ||
+  selected.length > LIMITS.maps ||
   selected.some((id) => !/^\d{9}$/.test(id))
 ) {
   throw new Error(
-    "--maps requires at most 1024 comma-separated nine-digit IDs",
+    `--maps requires at most ${LIMITS.maps} comma-separated nine-digit IDs`,
   );
 }
 let mapIds = [...new Set(selected)].sort();
@@ -427,7 +428,7 @@ function conversionReport(buildId, reports) {
       atlasLimit: ATLAS_LIMIT,
       padding: PADDING,
       regionSize: REGION_SIZE,
-      maxMaps: 1024,
+      maxMaps: LIMITS.maps,
     },
     counts: {
       textures: Object.keys(textures).length,

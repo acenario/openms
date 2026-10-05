@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { at, value, resolveNode } from "../src/assets/image.js";
 import { resource } from "./atlas.js";
+import { LIMITS } from "../src/rendering/stream-validation.js";
 
 const MAX_SOUNDS = 512;
 const MAX_EFFECT_FRAMES = 256;
@@ -435,7 +436,7 @@ async function retainedCombatSound(context, node, source) {
 
 /** Immutable catalog metadata; audio and visual payloads remain separately demand-loaded. */
 export async function extractAudiovisual(context, mapIds) {
-  if (!Array.isArray(mapIds) || mapIds.length > 1024) {
+  if (!Array.isArray(mapIds) || mapIds.length > LIMITS.maps) {
     throw new Error("Invalid audiovisual map selection");
   }
   mkdirSync(resolve(context.output, "audio"), { recursive: true });

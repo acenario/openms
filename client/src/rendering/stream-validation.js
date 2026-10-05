@@ -12,7 +12,8 @@ export const LIMITS = Object.freeze({
   cacheEntries: 32768,
   uploadBytes: 16 * 1024 * 1024,
   uploadMs: 4,
-  maps: 1024,
+  // Release map count; v83 Map.wz holds ~2.5k field images, so this covers the whole world.
+  maps: 4096,
   mapNames: 16384,
   uiTemplates: 32768,
   uiArtwork: 8192,

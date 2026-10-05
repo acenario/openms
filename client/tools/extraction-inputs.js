@@ -1,4 +1,5 @@
 import { at, value } from "../src/assets/image.js";
+import { LIMITS } from "../src/rendering/stream-validation.js";
 
 export const defaultRoots = Object.freeze([
   "100000000",
@@ -29,11 +30,11 @@ export function selectedMapIds(maps = defaultRoots) {
   if (
     !Array.isArray(ids) ||
     !ids.length ||
-    ids.length > 1024 ||
+    ids.length > LIMITS.maps ||
     ids.some((id) => typeof id !== "string" || !/^\d{9}$/.test(id))
   ) {
     throw new Error(
-      "--maps requires at most 1024 comma-separated nine-digit IDs",
+      `--maps requires at most ${LIMITS.maps} comma-separated nine-digit IDs`,
     );
   }
   return [...new Set(ids)].sort();

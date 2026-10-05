@@ -23,8 +23,9 @@ import {
   marketPortalKind,
   portalRouteStatus,
 } from "../src/world/portal-system.js";
+import { LIMITS } from "../src/rendering/stream-validation.js";
 
-const MAX_PLAYABLE_MAPS = 1024;
+const MAX_PLAYABLE_MAPS = LIMITS.maps;
 const MAX_NPC_PLACEMENTS = 4096;
 const MAX_NPC_DESTINATIONS = 32768;
 
@@ -113,7 +114,7 @@ function appendDestination(closure, target) {
   if (closure.seen.has(target)) return;
   if (closure.ids.length >= MAX_PLAYABLE_MAPS) {
     throw new Error(
-      "Playable map closure exceeds 1024 maps; select an explicit release",
+      `Playable map closure exceeds ${MAX_PLAYABLE_MAPS} maps; select an explicit release`,
     );
   }
   closure.seen.add(target);
