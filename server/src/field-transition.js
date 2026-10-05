@@ -361,6 +361,16 @@ function commitTransition(world, actor, transition, operation) {
   );
 }
 
+/** Field ticks start at zero per field, so every per-actor value read against
+ *  `actor.field.tick` or field identity is bound here on field entry and packet travel. */
+export function bindActorField(actor, field) {
+  actor.field = field;
+  actor.lastInputTick = field.tick;
+  actor.lastAdoptedTick = field.tick;
+  actor.actionStartTick = field.tick;
+  prepareMotionDiverts(actor, field);
+}
+
 function bindTransition(world, actor, transition) {
   const { source, target, arrival, simulation, request } = transition;
   releaseInteractions(actor, world);
@@ -370,11 +380,9 @@ function bindTransition(world, actor, transition) {
     relocateSimulation(actor.simulation, arrival);
   } else {
     source.characters.delete(actor.id);
-    actor.field = target;
     actor.simulation = simulation;
+    bindActorField(actor, target);
     target.characters.set(actor.id, actor);
-    prepareMotionDiverts(actor, target);
-    actor.lastInputTick = target.tick;
     bindSkillTravel(actor, transition.skillCandidate);
     bindActorWorldActions(actor, transition.worldActions);
   }

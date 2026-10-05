@@ -6,17 +6,21 @@ import { disposeActorSkills, prepareActorSkills } from "../src/field-skills.js";
 import { prepareActorWorldActions } from "../src/field-world-actions.js";
 import { transitionActor } from "../src/field-transition.js";
 import { recordMotionDivert, takeMotionDiverts } from "../src/field-diverts.js";
+import { actorEntity } from "../src/field-views.js";
 import { createProfile } from "../../client/src/profile/profile-validation.js";
+import { PROTOCOL, plausiblePositionPx } from "../../shared/protocol.js";
 
 /** A joined actor on a real field; persistence runs the operation's own mutate on a draft. */
-async function joined(mapId) {
+async function joined(mapId, { watchdogEnabled = false, tick = 0 } = {}) {
   const world = new OnlineWorld({
     content,
     database: { bindField: async () => {} },
+    watchdogEnabled,
     publish() {},
   });
   const source = await world.fieldFor(mapId);
   source.mobs = [];
+  source.tick = tick;
   const profile = createProfile({
     mapId: source.manifest.id,
     x: 0,
@@ -53,23 +57,28 @@ async function joined(mapId) {
   return { world, actor };
 }
 
+/** Drive the real packet transition through its client-ready gate. */
+async function travel(world, actor, mapId) {
+  const pending = transitionActor(
+    world,
+    actor,
+    { mapId },
+    { operationId: "travel" },
+  );
+  for (let i = 0; i < 200 && !actor.transition?.ready; i++) {
+    await Bun.sleep(5);
+  }
+  if (!actor.transition?.ready) await pending;
+  actor.transition.ready(true);
+  expect((await pending).status).toBe("committed");
+  expect(actor.field.mapId).toBe(mapId);
+}
+
 /** An unannounced impulse grant expires unreferenced and faults the next movement step. */
 test("a mob-hit divert after cross-map travel is announced on the destination field", async () => {
   const { world, actor } = await joined(100000000);
   try {
-    const travel = transitionActor(
-      world,
-      actor,
-      { mapId: 104000000 },
-      { operationId: "travel" },
-    );
-    for (let i = 0; i < 200 && !actor.transition?.ready; i++) {
-      await Bun.sleep(5);
-    }
-    if (!actor.transition?.ready) await travel;
-    actor.transition.ready(true);
-    expect((await travel).status).toBe("committed");
-    expect(actor.field.mapId).toBe(104000000);
+    await travel(world, actor, 104000000);
 
     recordMotionDivert(actor, actor.simulation, {
       vx: 120,
@@ -83,6 +92,33 @@ test("a mob-hit divert after cross-map travel is announced on the destination fi
     actor.field.tick++;
     const published = takeMotionDiverts(actor, actor.field);
     expect(published.map((divert) => divert.id)).toEqual(grants);
+  } finally {
+    disposeActorSkills(actor, true);
+  }
+});
+
+/** Every field counts its own ticks from creation; a long-lived source field's clock
+ *  must not survive into a fresh destination's reconnect allowance or peer animation. */
+test("a reconnect after cross-map travel is judged on the destination clock", async () => {
+  const { world, actor } = await joined(100000000, {
+    watchdogEnabled: true,
+    tick: 100000,
+  });
+  try {
+    await travel(world, actor, 104000000);
+    // Three seconds of honest walking whose inputs were lost with the socket.
+    const gapTicks = 100;
+    actor.field.tick += gapTicks;
+    const sim = actor.simulation;
+    const walked = { x: sim.x + 600, y: sim.y, vx: 0, vy: 0 };
+    expect(plausiblePositionPx(gapTicks * PROTOCOL.TICK_MS)).toBeGreaterThan(
+      600,
+    );
+    world.adoptResumedMotion(actor, walked);
+    expect(world.watchdog.snapshot().suspicious).toBe(0);
+    expect(actorEntity(actor).actionStartTick).toBeLessThanOrEqual(
+      actor.field.tick,
+    );
   } finally {
     disposeActorSkills(actor, true);
   }

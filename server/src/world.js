@@ -44,6 +44,7 @@ import {
   markAutomaticPortalAttempt,
   travelParticipants,
   prepareLogout,
+  bindActorField,
 } from "./field-transition.js";
 import { developActor, prepareMonsterSpawns } from "./field-development.js";
 import {
@@ -78,11 +79,7 @@ import {
   settleFieldReactors,
   destroyFieldReactors,
 } from "./field-reactors.js";
-import {
-  prepareMotionDiverts,
-  releaseMotionDiverts,
-  takeMotionDiverts,
-} from "./field-diverts.js";
+import { releaseMotionDiverts, takeMotionDiverts } from "./field-diverts.js";
 import { serverOwnsPosition, combatMotionOwner } from "./motion-authority.js";
 import {
   enqueueMovement,
@@ -355,13 +352,12 @@ export class OnlineWorld {
   prepareEntry(actor, field) {
     actor.arrival = nearestSavedArrival(field.manifest, actor.profile.location);
     actor.simulation = createSimulation(field.physics, actor.arrival);
-    actor.field = field;
+    bindActorField(actor, field);
     actor.input = createHeldInput();
     actor.inputQueue = new Map();
     resetAttackInput(actor);
     actor.inputSeq = 0;
     actor.ackInputSeq = null;
-    actor.lastInputTick = field.tick;
     actor.state = "preparing";
     actor.pending = false;
     actor.pendingOperation = null;
@@ -370,11 +366,8 @@ export class OnlineWorld {
     actor.developmentReceipts = new Map();
     actor.playSession ??= randomUUID();
     actor.portalUntil = 0;
-    actor.actionStartTick = field.tick;
     actor.lastCheckpoint = this.now;
     actor.admission = "OK";
-    actor.lastAdoptedTick = field.tick;
-    prepareMotionDiverts(actor, field);
   }
 
   /** Resume reports are diagnostics only. Reconnection never grants client position. */
