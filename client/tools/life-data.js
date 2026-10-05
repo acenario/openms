@@ -15,8 +15,9 @@ const MAX_TELEVISIONS = 128;
 // Extraction context owns this cache; no runtime/global residency is introduced.
 const caches = new WeakMap();
 
-/** Preserve authored optional scalar/vector fields without inventing defaults. */
-export function fields(node) {
+/** Preserve authored optional scalar/vector fields without inventing defaults.
+ * An action's `context` omits only the recorded dangling frame UOL. */
+export function fields(node, context = null) {
   const result = Object.create(null);
   if (!node) return result;
   const entries = Object.entries(resolveNode(node).children);
@@ -24,6 +25,7 @@ export function fields(node) {
     throw new Error("Life metadata exceeds policy");
   }
   for (const [key, child] of entries) {
+    if (context && danglingFrameUol(context, child)) continue;
     const resolved = resolveNode(child);
     if (resolved.value !== undefined) result[key] = resolved.value;
   }
@@ -136,9 +138,44 @@ export function lifeOrigin(canvas) {
   return origin;
 }
 
+/**
+ * Npc.wz:2111000.img say/14 is UOL "../4". PCOM 50c0fd6f joins a UOL to its owning
+ * directory (docs/asset-evidence.md), giving the absent Npc/2111000.img/4. The
+ * original client's runtime handling of a missing frame target is unrecovered; only
+ * this exact frame of these exact image bytes is omitted, so a changed input fails again.
+ */
+export const DANGLING_NPC_FRAME_UOL = Object.freeze({
+  code: "dangling-npc-frame-uol",
+  source: "Npc.wz:2111000.img",
+  field: "say/14",
+  raw: "../4",
+  sha256: "f5b174528fbcc11db46e65dd0ba140ad250443aad9cd1d8a26c69f2c128970a3",
+  normalized: null,
+  evidence:
+    "PCOM.dll 50c0f3e7/50c0fca8/50c0fd6f textual UOL join; docs/asset-evidence.md UOL base; client handling of a missing target unrecovered",
+});
+
+/** True only for the recorded dangling frame UOL; context.sourceSha256 reads original IMG bytes. */
+export function danglingFrameUol(context, frame) {
+  const action = frame?.parent,
+    root = action?.parent,
+    known = DANGLING_NPC_FRAME_UOL;
+  return (
+    frame.type === "UOL" &&
+    frame.value === known.raw &&
+    `${action.name}/${frame.name}` === known.field &&
+    root?.parent === null &&
+    root.source === known.source &&
+    context.sourceSha256(root.source) === known.sha256
+  );
+}
+
 /** Parts retain shared artwork hashes and original origins; timing never uses context.frames defaults. */
 async function extractAction(context, node, kind) {
-  const keys = Object.keys(node.children).filter((key) => /^\d+$/.test(key));
+  const keys = Object.keys(node.children).filter(
+    (key) =>
+      /^\d+$/.test(key) && !danglingFrameUol(context, node.children[key]),
+  );
   keys.sort((a, b) => Number(a) - Number(b));
   if (!keys.length || keys.length > MAX_FRAMES) {
     throw new Error("Invalid life frame count");
@@ -181,7 +218,11 @@ async function extractAction(context, node, kind) {
   }
   return {
     frames,
-    metadata: { timingKnown, properties: fields(node), frames: geometry },
+    metadata: {
+      timingKnown,
+      properties: fields(node, context),
+      frames: geometry,
+    },
   };
 }
 

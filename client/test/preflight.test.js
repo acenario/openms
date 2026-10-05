@@ -2,7 +2,11 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { bodyRectangle } from "../tools/life-data.js";
+import {
+  DANGLING_NPC_FRAME_UOL,
+  bodyRectangle,
+  danglingFrameUol,
+} from "../tools/life-data.js";
 import {
   preflightFindings,
   preflightInputs,
@@ -134,4 +138,21 @@ test("corrupt source boundaries remain owned and do not prevent unrelated source
     context.close();
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("only the recorded Npc.wz say/14 UOL of the recorded image bytes is omitted", () => {
+  const known = DANGLING_NPC_FRAME_UOL;
+  const frame = (raw, name = "14") => {
+    const root = { name: "", type: "Property", parent: null, children: {} };
+    root.source = known.source;
+    const say = { name: "say", type: "Property", parent: root, children: {} };
+    return { name, type: "UOL", value: raw, parent: say, children: {} };
+  };
+  const original = { sourceSha256: () => known.sha256 };
+  expect(danglingFrameUol(original, frame("../4"))).toBe(true);
+  expect(danglingFrameUol(original, frame("4"))).toBe(false);
+  expect(danglingFrameUol(original, frame("../4", "13"))).toBe(false);
+  expect(
+    danglingFrameUol({ sourceSha256: () => "0".repeat(64) }, frame("../4")),
+  ).toBe(false);
 });

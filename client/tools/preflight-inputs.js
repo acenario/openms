@@ -67,6 +67,7 @@ export function preflightInputs(assets, report, progress) {
   return {
     image,
     imageEntries: (name) => archive(name).entries,
+    sourceSha256: (key) => report.sources[key]?.sha256 ?? null,
     owners,
     dependencies,
     setOwner: (id) => {

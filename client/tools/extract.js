@@ -130,6 +130,7 @@ const extractionContext = {
   progress,
   output,
   imageEntries,
+  sourceSha256: (key) => sourceRecord(key).sha256,
   mapIds,
   bundle: (value) => packageVisualBundle(value, state),
 };

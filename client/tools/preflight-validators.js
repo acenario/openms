@@ -3,7 +3,14 @@ import { createHash } from "node:crypto";
 import { frameDelay } from "./extraction-frames.js";
 import { decodeCanvas } from "../src/assets/canvas.js";
 import { soundFormat, effectDelay, effectAlpha } from "./audiovisual-data.js";
-import { bodyRectangle, delayValue, fields, lifeOrigin } from "./life-data.js";
+import {
+  DANGLING_NPC_FRAME_UOL,
+  bodyRectangle,
+  danglingFrameUol,
+  delayValue,
+  fields,
+  lifeOrigin,
+} from "./life-data.js";
 import { screenCoordinate } from "./mapletv-data.js";
 import { eventRecord } from "./reactor-data.js";
 import { provenance, rawValue } from "./preflight-inputs.js";
@@ -94,6 +101,18 @@ function lifeAction(state, root, kind) {
   for (const key of Object.keys(root.children).filter((key) =>
     /^\d+$/.test(key),
   )) {
+    if (danglingFrameUol(state.context, root.children[key])) {
+      const { code, raw, normalized, evidence } = DANGLING_NPC_FRAME_UOL;
+      state.report.normalizations.push({
+        ...provenance(root.children[key]),
+        code,
+        raw,
+        valueType: "life-frame-uol",
+        normalized,
+        evidence,
+      });
+      continue;
+    }
     const frame = findings.check(
       root.children[key],
       "",
@@ -110,6 +129,14 @@ function lifeAction(state, root, kind) {
   }
 }
 
+/** Resolved traversal target; the recorded dangling frame UOL is already a normalization. */
+function treeNode(state, original) {
+  if (danglingFrameUol(state.context, original)) return null;
+  return state.findings.check(original, "", original.value, () =>
+    resolveNode(original),
+  );
+}
+
 /** The finite parsed tree plus resolved targets bounds traversal; visited identities close UOL cycles. */
 function tree(state, root, options = {}) {
   if (state.walked.has(root)) return;
@@ -118,10 +145,7 @@ function tree(state, root, options = {}) {
   const queue = [root],
     seen = new Set();
   for (let index = 0; index < queue.length; index++) {
-    const original = queue[index];
-    const node = state.findings.check(original, "", original.value, () =>
-      resolveNode(original),
-    );
+    const node = treeNode(state, queue[index]);
     if (!node || seen.has(node)) continue;
     seen.add(node);
     if (node.type === "Canvas") canvas(state, node);
@@ -256,6 +280,7 @@ export function originalValidators(report, findings) {
   const state = {
     report,
     findings,
+    context: { sourceSha256: (key) => report.sources[key]?.sha256 ?? null },
     decoded: new WeakMap(),
     walked: new WeakSet(),
     sounds: new WeakSet(),
