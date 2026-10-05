@@ -99,6 +99,16 @@ the new job's pool (`skillPointPool`, pool 1), 5 AP only with
 (others). 3rd/4th-job and any other transition is refused without changing the
 draft's published state.
 
+The explorer job-test maps 108000100/200/300/400 are already in the strict
+route closure with their inside instructors 1072006/1072005/1072004/1072007,
+their test mobs (9000001/2, 9000100/1, 9000200/1, 9000300/1) and those mobs'
+supported Dark Marble 4031013 rows (`152-drop-data.sql`, 70%, no quest gate);
+`server/test/second-job-content.test.js` checks the packaged catalog. The
+compiled NPC programs change, so a catalog extracted before these commits still
+carries the old traps/blockers until extraction is re-run. The pirate test rooms
+108000501/108000502 are not packaged: Kyrin's warp there sits behind his
+`field-population` and `event-instance` traps.
+
 Kyrin's `scripts/npc/1090000.js` uses the same first-job transaction for job0→500
 (DEX20, gun1492000, knuckle1482000, bullets2330000×1000). Its other branches
 need server state OpenMS does not own, so they compile to the same lazy traps:

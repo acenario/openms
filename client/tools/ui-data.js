@@ -1,4 +1,5 @@
 import { at, resolveNode, value } from "../src/assets/image.js";
+import { isCustomQuest } from "../src/quests/custom-quests.js";
 import { originalFrames } from "./extraction-frames.js";
 import { extractItemSkillUI } from "./ui-item-data.js";
 import { extractNpcPortraits, extractDialogArtwork } from "./ui-npc-data.js";
@@ -642,6 +643,8 @@ function metadataCoverage(context, visuals, missing) {
     ["quest", dependencies.questIds, context.quests.records],
   ]) {
     for (const id of ids) {
+      // State-only custom quests have no original record by definition.
+      if (kind === "quest" && isCustomQuest(id)) continue;
       if (!dictionary[id]) {
         missing.push({
           kind,
