@@ -58,11 +58,11 @@ async function joined(mapId, { watchdogEnabled = false, tick = 0 } = {}) {
 }
 
 /** Drive the real packet transition through its client-ready gate. */
-async function travel(world, actor, mapId) {
+async function travel(world, actor, mapId, portal) {
   const pending = transitionActor(
     world,
     actor,
-    { mapId },
+    portal === undefined ? { mapId } : { mapId, portal },
     { operationId: "travel" },
   );
   for (let i = 0; i < 200 && !actor.transition?.ready; i++) {
@@ -119,6 +119,25 @@ test("a reconnect after cross-map travel is judged on the destination clock", as
     expect(actorEntity(actor).actionStartTick).toBeLessThanOrEqual(
       actor.field.tick,
     );
+  } finally {
+    disposeActorSkills(actor, true);
+  }
+});
+
+/** Original 910300000/out00 names 103000000 "hide01", which Kerning City lacks;
+ *  Cosmic GenericPortal enters `to.getPortal(target) ?? to.getPortal(0)`. */
+test("a destination portal name absent from the target map arrives at portal 0", async () => {
+  const { world, actor } = await joined(910300000);
+  try {
+    const out00 = actor.field.manifest.physics.portals.find(
+      (portal) => portal.name === "out00",
+    );
+    expect(out00).toMatchObject({ targetMap: 103000000, targetName: "hide01" });
+    await travel(world, actor, 103000000, out00.targetName);
+    const portals = actor.field.manifest.physics.portals;
+    expect(portals.some((portal) => portal.name === "hide01")).toBe(false);
+    const spawn = portals.find((portal) => portal.id === 0);
+    expect(actor.simulation.x).toBe(spawn.x);
   } finally {
     disposeActorSkills(actor, true);
   }

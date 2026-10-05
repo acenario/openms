@@ -22,7 +22,20 @@ function portalArrival(portal) {
   return { x: portal.x, y: portal.y - 10 };
 }
 
-/** Field links select a unique name; family travel selects original portal zero by ID. */
+/** The unique portal whose ID or name equals the selector, or null. */
+function selectPortal(manifest, byId, selector) {
+  let selected = null;
+  for (const portal of destinationPortals(manifest)) {
+    if ((byId ? portal.id : portal.name) !== selector) continue;
+    if (selected) throw new Error(`Ambiguous destination portal ${selector}`);
+    selected = portal;
+  }
+  return selected;
+}
+
+/** Field links select a unique name; family travel selects original portal zero by ID.
+ * An authored name absent from the destination falls back to portal ID0, as Cosmic
+ * GenericPortal.enterPortal `to.getPortal(target) ?? to.getPortal(0)`. */
 export function arrivalPosition(manifest, selector) {
   if (selector === null) return null;
   const byId = Number.isInteger(selector) && selector >= 0;
@@ -32,12 +45,9 @@ export function arrivalPosition(manifest, selector) {
   ) {
     throw new Error("Invalid destination portal selector");
   }
-  let selected = null;
-  for (const portal of destinationPortals(manifest)) {
-    if ((byId ? portal.id : portal.name) !== selector) continue;
-    if (selected) throw new Error(`Ambiguous destination portal ${selector}`);
-    selected = portal;
-  }
+  const selected =
+    selectPortal(manifest, byId, selector) ??
+    (byId ? null : selectPortal(manifest, true, 0));
   if (!selected) throw new Error(`Destination portal ${selector} unavailable`);
   return portalArrival(selected);
 }

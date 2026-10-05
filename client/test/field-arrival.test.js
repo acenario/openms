@@ -58,7 +58,10 @@ test("named/numeric and explicit arrivals override reload selection without spaw
   expect(
     fieldArrival(field, null, { ...location, mapId: "100000001" }),
   ).toBeNull();
-  expect(() => arrivalPosition(field, "missing")).toThrow();
+  // Cosmic GenericPortal: an absent target name enters destination portal ID0.
+  expect(arrivalPosition(field, "missing")).toEqual({ x: 0, y: -10 });
+  expect(() => arrivalPosition(manifest([]), "missing")).toThrow();
+  expect(() => arrivalPosition(field, 9)).toThrow();
   field.physics.portals.push(spawn(8, 3, 4, { name: "east" }));
   expect(() => arrivalPosition(field, "east")).toThrow();
 });
