@@ -570,6 +570,63 @@ test.skipIf(!databaseUrl)(
   30000,
 );
 
+/** Fail the next `count` transactions the way PostgreSQL cancels an SSI pivot (40001). */
+function injectSerializationFailures(database, count) {
+  const begin = database.sql.begin.bind(database.sql);
+  let remaining = count;
+  database.sql.begin = (options, work) =>
+    begin(options, async (tx) => {
+      const result = await work(tx);
+      if (remaining-- > 0) {
+        throw Object.assign(new Error("could not serialize access"), {
+          code: "ERR_POSTGRES_SERVER_ERROR",
+          errno: "40001",
+        });
+      }
+      return result;
+    });
+  return () => {
+    database.sql.begin = begin;
+  };
+}
+
+async function proveReconnectCheckpointContention(database, content) {
+  const { actor } = await characterFixture(database, content, "Successor");
+  await database.checkpoint(actor);
+  await database.releaseLease(actor);
+  const successor = await database.acquireLease(actor.accountId, actor.id);
+  expect(successor.fence).toBe(actor.fence + 1);
+  successor.profile.hp -= 7;
+  successor.profile.location.x += 13;
+  // The live dev log showed three consecutive pivot cancellations of one checkpoint.
+  const restore = injectSerializationFailures(database, 3);
+  try {
+    await database.checkpoint(successor);
+  } finally {
+    restore();
+  }
+  const durable = await database.loadCharacter(actor.accountId, actor.id);
+  expect(durable.profile.hp).toBe(successor.profile.hp);
+  expect(durable.profile.location.x).toBe(successor.profile.location.x);
+  const exhaust = injectSerializationFailures(database, Infinity);
+  try {
+    await expect(database.checkpoint(successor)).rejects.toMatchObject({
+      code: "SERVER_BUSY",
+      cause: { errno: "40001" },
+    });
+  } finally {
+    exhaust();
+  }
+}
+
+test.skipIf(!databaseUrl)(
+  "PostgreSQL retries a reconnected successor's checkpoint through repeated serialization pivots",
+  async () => {
+    await withDatabase(proveReconnectCheckpointContention);
+  },
+  30000,
+);
+
 async function proveLedgerIndex(database) {
   await database.sql`INSERT INTO ledger(transaction_id,account_key,asset,delta,reason)
     SELECT 'index-proof-'||n,'owner','meso',d,'test' FROM generate_series(1,10000) n CROSS JOIN (VALUES(1),(-1)) sides(d)`;

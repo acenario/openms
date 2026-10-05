@@ -39,12 +39,18 @@ import {
   readHistoryQuery,
 } from "./database-history.js";
 
-const MAX_ATTEMPTS = 3;
+// Every actor checkpoints at 1 Hz in SERIALIZABLE, so same-tick checkpoints and commits
+// can cancel one transaction as an SSI pivot several times in a row (three were observed
+// live). Jittered exponential backoff desynchronizes the retries; worst case ~310 ms.
+const MAX_ATTEMPTS = 6;
+const RETRY_BASE_MS = 10;
 const MAX_EVENTS = 256;
 const LEASE_SECONDS = 45;
 
-function failure(code) {
-  return Object.assign(new Error(code), { code });
+function failure(code, cause) {
+  return Object.assign(new Error(code, cause ? { cause } : undefined), {
+    code,
+  });
 }
 function id() {
   return crypto.randomUUID();
@@ -535,8 +541,8 @@ export class Database {
           throw failure("NAME_TAKEN");
         }
         if (!["40001", "40P01"].includes(code)) throw error;
-        if (attempt === MAX_ATTEMPTS - 1) throw failure("SERVER_BUSY");
-        await Bun.sleep(10 * (attempt + 1));
+        if (attempt === MAX_ATTEMPTS - 1) throw failure("SERVER_BUSY", error);
+        await Bun.sleep(Math.random() * RETRY_BASE_MS * 2 ** attempt);
       }
     }
     throw failure("SERVER_BUSY");

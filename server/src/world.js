@@ -681,7 +681,9 @@ export class OnlineWorld {
         this.neutralize(actor);
         this.log?.("checkpoint.failed", {
           character: actor.id,
-          code: error.code ?? "SERVER_BUSY",
+          code: error.code ?? null,
+          message: error.message,
+          cause: error.cause?.errno ?? error.cause?.code ?? null,
         });
         this.publish(actor, {
           type: "closing",
