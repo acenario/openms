@@ -261,7 +261,7 @@ function turnRequest(actor, lease, input) {
   };
 }
 
-function scriptProfile(profile) {
+export function scriptProfile(profile) {
   const snapshot = structuredClone(profile);
   delete snapshot.onlineState;
   return snapshot;

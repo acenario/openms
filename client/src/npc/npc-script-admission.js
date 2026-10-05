@@ -396,16 +396,19 @@ function validateDialog(node, context) {
   );
 }
 
+function effectArity(kind) {
+  if (kind === "portal-sound") return [0, 0];
+  if (["meso", "crafting-scroll", "save-location"].includes(kind)) {
+    return [1, 1];
+  }
+  return [1, kind === "item" ? 3 : 2];
+}
+
 function validateEffect(node, context) {
-  const maximum = ["meso", "crafting-scroll", "save-location"].includes(
-    node.kind,
-  )
-    ? 1
-    : node.kind === "item"
-      ? 3
-      : 2;
+  const [minimum, maximum] = effectArity(node.kind);
   requireNpc(
     [
+      "portal-sound",
       "meso",
       "crafting-scroll",
       "save-location",
@@ -419,7 +422,7 @@ function validateEffect(node, context) {
     "Unknown NPC effect",
   );
   list(node.args, maximum);
-  requireNpc(node.args.length >= 1, "Missing NPC effect argument");
+  requireNpc(node.args.length >= minimum, "Missing NPC effect argument");
   validateJobEffectPolicy(node, context);
   requirement(context, "atomic-local-turn");
   if (node.kind === "warp") requirement(context, "atomic-field-travel");

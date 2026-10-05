@@ -2,6 +2,7 @@ import {
   npcBooleanConfig,
   npcMissingQuestService,
   npcRemoteService,
+  npcRemoteReceiver,
   npcRemoteLoop,
 } from "./npc-script-services.js";
 import {
@@ -286,8 +287,18 @@ function itemEffect(context, node, refs) {
   };
 }
 
+// GenericPortal authority publishes only one warp and its sound.
+const PORTAL_EFFECT_KINDS = new Set(["warp", "portal-sound"]);
+
+function admitPortalEffect(context, node, kind) {
+  if (context.portal && !PORTAL_EFFECT_KINDS.has(kind)) {
+    blockScript(context, node, `Unsupported portal effect: ${kind}`);
+  }
+}
+
 function effectStatement(context, scope, node, spec) {
   const args = node.arguments;
+  admitPortalEffect(context, node, spec.kind);
   if (args.length < spec.min || args.length > spec.max) {
     blockScript(context, node, "Unsupported local effect overload");
   }
@@ -459,7 +470,9 @@ function defaultDialog(context, scope, node) {
 
 function callStatement(context, scope, node) {
   const remote =
-    npcMissingQuestService(context, node) ?? npcRemoteService(node);
+    npcMissingQuestService(context, node) ??
+    npcRemoteService(node, context.portal) ??
+    npcRemoteReceiver(context, scope, node);
   if (remote) return { op: "unavailable", service: remote };
   const saved =
     savedLocationCall(context, scope, node) ??
@@ -479,6 +492,14 @@ function callStatement(context, scope, node) {
 
 function localCallStatement(context, scope, node) {
   const method = cmMethod(node);
+  // PortalPlayerInteraction.playPortalSound; NPCConversationManager has no such member.
+  if (context.portal && method === "playPortalSound") {
+    return effectStatement(context, scope, node, {
+      kind: "portal-sound",
+      min: 0,
+      max: 0,
+    });
+  }
   if (Object.hasOwn(NPC_DIALOG_METHODS, method)) {
     return dialogStatement(context, scope, node, NPC_DIALOG_METHODS[method]);
   }
@@ -741,11 +762,16 @@ export function compileNpcScript(input) {
   context.defaultTalk = input.defaultTalk;
   context.staticConfig = input.staticConfig;
   context.originalQuestIds = input.originalQuestIds;
+  context.portal = input.portal === true;
   let program = null;
   try {
+    const parsed = parseNpcSource(text);
     const root = lowerNpcHelpers(
       context,
-      lowerNpcRecords(context, parseNpcSource(text)),
+      lowerNpcRecords(
+        context,
+        context.portal ? input.lowerSource(parsed) : parsed,
+      ),
     );
     inspectScopes(context, root);
     context.root = root;

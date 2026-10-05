@@ -70,6 +70,13 @@ export const NPC_REMOTE_SERVICES = Object.freeze([
   "skill-grant",
   "field-population",
   "random-outcome",
+  "player-message",
+  "portal-session-state",
+  "npc-conversation",
+  "client-presentation",
+  "field-state",
+  "inventory-mutation",
+  "quest-mutation",
 ]);
 
 export const NPC_READ_TYPES = Object.freeze({

@@ -83,7 +83,7 @@ function declare(context, scope, declaration, kind) {
     host: shopFactoryImport(declaration.init)
       ? "shop-factory"
       : javaImport(declaration.init),
-    remoteService: npcRemoteService(declaration.init),
+    remoteService: npcRemoteService(declaration.init, context.portal),
     declarationEnd: declaration.end ?? node.end,
   };
   table.set(node.name, variable);

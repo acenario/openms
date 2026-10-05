@@ -58,7 +58,8 @@ export async function boundedNpcTurn(world, request) {
         if (settled) return;
         settled = true;
         world.log?.("npc.turn.failed", {
-          source: request.environment.npcId,
+          source:
+            request.environment.npcId ?? request.environment.portal?.script,
           code,
           reason,
         });

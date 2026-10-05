@@ -9,6 +9,7 @@ import { hash, resource } from "./atlas.js";
 import { compileNpcScript } from "./npc-script-compiler.js";
 import { compileNpcRoutes } from "./npc-script-routes.js";
 import { compileTutorialPortal } from "./portal-data.js";
+import { compilePortalScript } from "./portal-script-compiler.js";
 import { TUTORIAL_PORTAL_PROGRAMS } from "../src/npc/npc-script-portals.js";
 import {
   sourcePaths as configuredSources,
@@ -185,10 +186,50 @@ async function scriptFile(root, source) {
   return file;
 }
 
-function collectTutorialPortal(source, file, portalPrograms) {
+function collectPortal(source, file, inventory, options) {
   const script = source.slice("scripts/portal/".length, -3);
   if (Object.hasOwn(TUTORIAL_PORTAL_PROGRAMS, script)) {
-    portalPrograms[script] = compileTutorialPortal({ script, text: file.text });
+    inventory.portalPrograms[script] = compileTutorialPortal({
+      script,
+      text: file.text,
+    });
+    return null;
+  }
+  const compilation = compilePortalScript({
+    text: file.text,
+    path: source,
+    sha256: file.sha256,
+    staticConfig: options.staticConfig,
+    originalQuestIds: options.originalQuestIds,
+  });
+  inventory.portalScripts[script] = compilation;
+  return compilationSummary(compilation);
+}
+
+/** One source's category compiler; other categories stay byte inventories. */
+function compileScript(state, category, path, { record, file }) {
+  const { options, staticConfig } = state;
+  if (category === "npc") {
+    const compilation = compileNpcScript({
+      text: file.text,
+      path: record.source,
+      sha256: file.sha256,
+      defaultTalk: scriptDefaultTalk(record.source, options.defaultTalkForNpc),
+      staticConfig,
+      originalQuestIds: options.originalQuestIds,
+    });
+    state.compilations.push(compilation);
+    record.sourceText = file.text;
+    record.compilation = compilationSummary(compilation);
+  } else if (category === "portal") {
+    const summary = collectPortal(record.source, file, state, {
+      staticConfig,
+      originalQuestIds: options.originalQuestIds,
+    });
+    if (summary) record.compilation = summary;
+  } else if (category === "reactor") {
+    state.reactorPrograms[path.slice("reactor/".length, -3)] =
+      compileReactorReward({ ...file, source: record.source });
   }
 }
 
@@ -196,10 +237,15 @@ async function scriptInventory(root, options, staticConfig) {
   options.progress?.("Gameplay content: scanning local scripts");
   const paths = await sourcePaths(root, "", ".js");
   const files = [],
-    compilations = [],
     categories = Object.create(null);
-  const portalPrograms = Object.create(null);
-  const reactorPrograms = Object.create(null);
+  const state = {
+    options,
+    staticConfig,
+    compilations: [],
+    portalPrograms: Object.create(null),
+    portalScripts: Object.create(null),
+    reactorPrograms: Object.create(null),
+  };
   let bytes = 0;
   for (const path of paths) {
     const source = `scripts/${path}`;
@@ -215,38 +261,19 @@ async function scriptInventory(root, options, staticConfig) {
     const category = parts.length > 2 ? parts[1] : "root";
     categories[category] = (categories[category] ?? 0) + 1;
     const record = { source, bytes: file.bytes, sha256: file.sha256 };
-    if (category === "npc") {
-      const compilation = compileNpcScript({
-        text: file.text,
-        path: source,
-        sha256: file.sha256,
-        defaultTalk: scriptDefaultTalk(source, options.defaultTalkForNpc),
-        staticConfig,
-        originalQuestIds: options.originalQuestIds,
-      });
-      compilations.push(compilation);
-      record.sourceText = file.text;
-      record.compilation = compilationSummary(compilation);
-    }
-    if (category === "portal") {
-      collectTutorialPortal(source, file, portalPrograms);
-    }
-    if (category === "reactor") {
-      reactorPrograms[path.slice("reactor/".length, -3)] = compileReactorReward(
-        { ...file, source },
-      );
-    }
+    compileScript(state, category, path, { record, file });
     files.push(record);
   }
   options.progress?.(`Gameplay content: ${files.length} scripts inventoried`);
   return {
     status:
-      "npc-complete-source-compiler; verified-tutorial-portals; other-categories-inventoried",
+      "npc-complete-source-compiler; verified-tutorial-portals; portal-scripts-through-npc-compiler; other-categories-inventoried",
     categories,
     files,
-    compilations,
-    portalPrograms,
-    reactorPrograms,
+    compilations: state.compilations,
+    portalPrograms: state.portalPrograms,
+    portalScripts: state.portalScripts,
+    reactorPrograms: state.reactorPrograms,
   };
 }
 
@@ -342,7 +369,42 @@ function inventorySummary(inventory, tables, scripts) {
     npcScriptsBlocked: scripts.compilations.filter(
       (script) => script.status === "blocked",
     ).length,
+    portalScriptsSupported: Object.values(scripts.portalScripts).filter(
+      (script) => script.status === "supported",
+    ).length,
+    portalScriptsBlocked: Object.values(scripts.portalScripts).filter(
+      (script) => script.status === "blocked",
+    ).length,
   };
+}
+
+/** Supported portal programs join the packaged dependency closure NPC routes use. */
+function publishPortalScripts(shops, portalScripts) {
+  const supported = Object.create(null);
+  const sets = Object.fromEntries(
+    Object.entries(shops.supportedDependencies).map(([key, values]) => [
+      key,
+      new Set(values),
+    ]),
+  );
+  for (const [script, compilation] of Object.entries(portalScripts)) {
+    if (compilation.status !== "supported") continue;
+    supported[script] = compilation;
+    for (const [key, values] of Object.entries(compilation.dependencies)) {
+      if (!sets[key]) throw new Error(`Unknown portal dependency: ${key}`);
+      for (const value of values) sets[key].add(value);
+    }
+  }
+  shops.portalScripts = supported;
+  shops.supportedDependencies = Object.fromEntries(
+    Object.entries(sets).map(([key, values]) => [
+      key,
+      [...values].sort((a, b) =>
+        typeof a === "number" ? a - b : a.localeCompare(b),
+      ),
+    ]),
+  );
+  shops.supportedItemIds = shops.supportedDependencies.itemIds;
 }
 
 /** Local gameplay settings only; no server implementation, Java hashes or deployment config. */
@@ -403,6 +465,7 @@ export async function convertServerData(options = {}) {
     datasets.shops,
     compileNpcRoutes(datasets.shops.tables, scripts.compilations),
   );
+  publishPortalScripts(datasets.shops, scripts.portalScripts);
   datasets.shops.sources.push(...policy.sources);
   datasets.shops.npcCraftingPolicy = {
     enhancedCrafting: policy.enhancedCrafting,
@@ -424,7 +487,7 @@ export async function convertServerData(options = {}) {
     exclusions: [
       "Account, character, inventory, keymap and storage bootstrap rows are not browser reference data; no credentials are published.",
       "Schema-only tables contain no world content. SQL defaults are not seed rows.",
-      "NPC compilation admits bounded closed syntax; unknown constructs block a route. Recognized unavailable services stop the selected step before durable effects commit. Four hash-verified tutorial portal programs are admitted; other script categories remain inventories.",
+      "NPC compilation admits bounded closed syntax; unknown constructs block a route. Recognized unavailable services stop the selected step before durable effects commit. Four hash-verified tutorial portal programs are admitted; other sentinel portal scripts compile through the NPC compiler (enter(pi) as start) and run only on the online authority; other script categories remain inventories.",
       "SQL prices/drop chances are Cosmic server policy, not original Nexon client authority.",
     ],
     summary,

@@ -65,7 +65,6 @@ function originalName(value) {
 
 /** No missing table or fabricated renderer label is authority for an authored dependency. */
 export function validateNpcEnvironment(context, environment) {
-  npcInteger(environment.npcId, 1);
   requireNpc(
     environment.items &&
       environment.quests?.schemaVersion === 1 &&
@@ -74,12 +73,7 @@ export function validateNpcEnvironment(context, environment) {
     "NPC environment lacks original catalogs or ownership guards",
     "npc-dependency",
   );
-  requireNpc(
-    originalName(npcLookup(environment.names?.npc, environment.npcId)) &&
-      npcLookup(environment.portraits, environment.npcId),
-    "Interacting NPC name/portrait is not packaged",
-    "npc-dependency",
-  );
+  validateEnvironmentOwner(context, environment);
   if (context.requirements.has("atomic-field-travel")) {
     requireNpc(
       typeof environment.prepareTravel === "function",
@@ -96,6 +90,27 @@ export function validateNpcEnvironment(context, environment) {
   }
   validateCatalogDependencies(context.dependencies, environment);
   validateNameDependencies(context.dependencies, environment);
+}
+
+function validateEnvironmentOwner(context, environment) {
+  if (environment.portal === undefined) {
+    npcInteger(environment.npcId, 1);
+    requireNpc(
+      originalName(npcLookup(environment.names?.npc, environment.npcId)) &&
+        npcLookup(environment.portraits, environment.npcId),
+      "Interacting NPC name/portrait is not packaged",
+      "npc-dependency",
+    );
+    return;
+  }
+  // A portal script has no interacting NPC; one authored portal owns it.
+  requireNpc(
+    environment.npcId === undefined &&
+      /^[A-Za-z0-9_]{1,64}$/.test(environment.portal?.script) &&
+      context.source?.path === `scripts/portal/${environment.portal.script}.js`,
+    "Portal script environment differs from its authored source",
+    "npc-dependency",
+  );
 }
 
 function validateCatalogDependencies(dependencies, environment) {
@@ -829,7 +844,10 @@ export function applyNpcEffect(turn, node, args) {
   else if (node.kind === "job") jobEffect(turn, args);
   else if (node.kind === "reset-stats") resetStatsEffect(turn, args[0]);
   else if (node.kind === "warp") warpEffect(turn, args);
-  else if (node.kind === "save-location") saveLocation(turn, args[0]);
+  else if (node.kind === "portal-sound") {
+    // PortalPlayerInteraction.playPortalSound: presentation only, no profile change.
+    turn.effects.push({ kind: "portal-sound" });
+  } else if (node.kind === "save-location") saveLocation(turn, args[0]);
   else if (node.kind === "crafting-scroll") {
     requireNpc(
       args.length === 1 && typeof args[0] === "boolean",

@@ -13,6 +13,7 @@ import {
   PortalTravelGate,
   portalRouteStatus,
   marketPortalKind,
+  scriptedPortalKind,
   resolveMarketTravel,
   selectMarketReturnPortal,
 } from "../../client/src/world/portal-system.js";
@@ -45,6 +46,7 @@ import {
 import { interactionReceipt } from "./interaction-common.js";
 import { operationFor } from "./action-rules.js";
 import { publishTravelPreview } from "./field-travel-preview.js";
+import { scriptedPortalTravel } from "./field-portal-scripts.js";
 import { PROTOCOL } from "../../shared/protocol.js";
 
 const TRAVEL_TIMEOUT_MS = PROTOCOL.ASSET_PREPARATION_TIMEOUT_MS;
@@ -86,7 +88,11 @@ function admittedPortal(actor, id) {
   ) {
     throw protocolError("NOT_ALLOWED");
   }
-  const unsupported = portalRouteStatus(portal, rawPortal(actor, portal));
+  const raw = rawPortal(actor, portal);
+  // A sentinel script's own compiled program decides its admission and route.
+  const unsupported = scriptedPortalKind(portal, raw)
+    ? null
+    : portalRouteStatus(portal, raw);
   if (unsupported) {
     actor.admission = `unsupported-content: ${unsupported}`;
     throw protocolError("REQUIREMENTS_NOT_MET");
@@ -494,12 +500,24 @@ async function tutorialPortal(world, actor, portal) {
 
 /** Internal trusted destination only; gameplay intent never carries a map/XY. */
 export async function transitionActor(world, actor, destination, operation) {
-  const portal =
+  let portal =
     destination.portalId === undefined
       ? null
       : admittedPortal(actor, destination.portalId);
   if (portal && tutorialPortalKind(portal, rawPortal(actor, portal))) {
     return tutorialPortal(world, actor, portal);
+  }
+  if (portal && scriptedPortalKind(portal, rawPortal(actor, portal))) {
+    const scripted = await scriptedPortalTravel(
+      world,
+      actor,
+      portal,
+      operation,
+    );
+    // GenericPortal: a script that does not warp leaves the character in place.
+    if (!scripted) return interactionReceipt(actor.revision);
+    ({ destination, operation } = scripted);
+    portal = null;
   }
   const request = destinationRequest(actor, destination, portal);
   const transition = beginTransition(world, actor, request);

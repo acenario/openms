@@ -162,6 +162,22 @@ export function marketPortalKind(portal, raw) {
   return MARKET_ENTRY_SCRIPT.test(raw.script) ? "entry" : null;
 }
 
+/** Native 0094df9b Up request for a sentinel type7/8/11 script other than the
+ *  market/tutorial translations. Only the online authority may run its compiled
+ *  source (server/src/field-portal-scripts.js); routing status remains unavailable here. */
+export function scriptedPortalKind(portal, raw) {
+  if (
+    portal.targetMap !== 999999999 ||
+    ![7, 8, 11].includes(portal.type) ||
+    typeof raw.script !== "string" ||
+    !/^[A-Za-z0-9_]{1,64}$/.test(raw.script) ||
+    marketPortalKind(portal, raw)
+  ) {
+    return null;
+  }
+  return raw.script;
+}
+
 /** Server policy translation; the field/profile owner commits this plan atomically. */
 export function resolveMarketTravel(request, profile) {
   const source = Number(request.sourceMapId);

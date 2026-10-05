@@ -22,6 +22,7 @@ import { at, value, resolveNode } from "../src/assets/image.js";
 import {
   marketPortalKind,
   portalRouteStatus,
+  scriptedPortalKind,
 } from "../src/world/portal-system.js";
 
 const MAX_PLAYABLE_MAPS = 1024;
@@ -139,12 +140,28 @@ export function admitNpcDestinations(context, source, closure) {
   admitPortalNpcDestinations(context, source, closure);
 }
 
+/** A supported online portal script contributes its finite literal warp maps. */
+function supportedPortalScript(context, portal, raw) {
+  const script = scriptedPortalKind(portal, raw);
+  const compilation = script ? context.portalScripts?.[script] : null;
+  return compilation?.status === "supported" ? compilation : null;
+}
+
 function admitPortalNpcDestinations(context, source, closure) {
   // Portal-opened NPCs need no physical life placement, but use the same authored closure.
   for (const node of mapPortals(context, source)) {
-    const script = tutorialPortalKind(routeFields(node), {
-      script: value(node, "script", ""),
-    });
+    const raw = { script: value(node, "script", "") };
+    const compilation = supportedPortalScript(context, routeFields(node), raw);
+    if (compilation) {
+      admitDestinationMaps(
+        context,
+        { source, portalScript: raw.script },
+        compilation.dependencies.mapIds,
+        closure,
+      );
+      continue;
+    }
+    const script = tutorialPortalKind(routeFields(node), raw);
     const npc = TUTORIAL_PORTAL_PROGRAMS[script]?.openNpc;
     if (!npc || closure.npcIds.has(npc.npcId)) continue;
     const route = context.npcRoutes.get(npc.npcId);
@@ -155,7 +172,15 @@ function admitPortalNpcDestinations(context, source, closure) {
 }
 
 function admitNpcRoute(context, source, route, closure) {
-  const targets = route.dependencies.mapIds;
+  admitDestinationMaps(
+    context,
+    { source, npcId: route.npcId },
+    route.dependencies.mapIds,
+    closure,
+  );
+}
+
+function admitDestinationMaps(context, owner, targets, closure) {
   if (targets.length > MAX_NPC_DESTINATIONS) {
     throw new Error("NPC destination limit exceeded");
   }
@@ -163,8 +188,7 @@ function admitNpcRoute(context, source, route, closure) {
     const target = String(id).padStart(9, "0");
     if (!context.imageEntries("Map").has(`Map/Map${target[0]}/${target}.img`)) {
       closure.blocked.push({
-        source,
-        npcId: route.npcId,
+        ...owner,
         target,
         reason: "npc-destination-map-unavailable",
       });
@@ -179,6 +203,8 @@ export function admitClosureRoute(context, source, node, blocked) {
   const authored = routeFields(node);
   const raw = { script: value(node, "script", "") };
   if (tutorialPortalKind(authored, raw)) return null;
+  // Its literal warp maps join through admitNpcDestinations.
+  if (supportedPortalScript(context, authored, raw)) return null;
   const portal = closureRoute(authored, raw, source);
   let reason = portalRouteStatus(authored, raw);
   if (source === "910000000" && marketPortalKind(authored, raw) === "entry") {

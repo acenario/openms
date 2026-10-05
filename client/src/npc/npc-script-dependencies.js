@@ -209,7 +209,11 @@ function effectDependencies(analysis, node) {
     validateSavedType(analysis.context, node);
     return;
   }
-  if (["meso", "crafting-scroll", "job", "reset-stats"].includes(node.kind)) {
+  if (
+    ["meso", "crafting-scroll", "job", "reset-stats", "portal-sound"].includes(
+      node.kind,
+    )
+  ) {
     return;
   }
   if (node.kind === "warp") {

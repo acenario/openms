@@ -660,9 +660,15 @@ export function executeNpcTurn(context, state, profile, input) {
     turn.locals = locals(program, "action", input.args);
     statements.run(program.functions.action.entry);
   }
+  // PortalScriptManager discards its interaction after enter(); a portal turn presents no view.
+  requireNpc(
+    !input.portal || turn.view === null,
+    "Portal script emitted an NPC view",
+    "npc-output",
+  );
   if (!turn.view) {
     requireNpc(
-      turn.disposed,
+      turn.disposed || input.portal === true,
       "NPC callback produced no view and did not dispose",
       "npc-output",
     );
