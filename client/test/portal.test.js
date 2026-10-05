@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   PortalSystem,
   PortalTravelGate,
@@ -10,7 +11,11 @@ import {
   TUTORIAL_PORTAL_PROGRAMS,
   tutorialNpcOffered,
 } from "../src/npc/npc-script-portals.js";
-import { compileTutorialPortal } from "../tools/portal-data.js";
+import {
+  collectPlayableMaps,
+  compileTutorialPortal,
+} from "../tools/portal-data.js";
+import { compileTransportSchedule } from "../tools/transport-schedule-compiler.js";
 
 test("portal admission is response-timed and stale completions cannot release a successor", () => {
   let now = 0;
@@ -234,4 +239,53 @@ test("a conversation is treated as absent only for the removed NPC identity", ()
   expect(tutorialNpcOffered({ openNpc: { npcId: 9010000 } })).toBe(true);
   expect(tutorialNpcOffered({ openNpc: null })).toBe(false);
   expect(tutorialNpcOffered(null)).toBe(false);
+});
+
+function boatsClosure(packaged) {
+  const path = "event/Boats.js";
+  const text = readFileSync(
+    new URL(`../../infra/gameplay-definitions/${path}`, import.meta.url),
+    "utf8",
+  );
+  const Boats = compileTransportSchedule({ text, path, sha256: "test" });
+  const empty = { children: {} };
+  const context = {
+    image: () => empty,
+    imageEntries: () => ({
+      has: (entry) => packaged(entry.slice(-13, -4)),
+    }),
+    npcRoutes: new Map(),
+    transportSchedules: { Boats },
+  };
+  return collectPlayableMaps(context, ["200000100"]);
+}
+
+test("a reached transport station admits both legs' waiting rooms, rides and cabins", () => {
+  // Orbis's waiting room is reached only through Isa's computed platform warp.
+  const { ids, blocked } = boatsClosure(() => true);
+  expect(ids).toEqual([
+    "101000300",
+    "101000301",
+    "200000100",
+    "200000111",
+    "200000112",
+    "200090000",
+    "200090001",
+    "200090010",
+    "200090011",
+  ]);
+  expect(blocked).toEqual([]);
+});
+
+test("a transport with an unavailable map stays out of the closure", () => {
+  const { ids, blocked } = boatsClosure((id) => id !== "200090001");
+  expect(ids).toEqual(["200000100"]);
+  expect(blocked).toEqual([
+    {
+      source: "200000100",
+      event: "Boats",
+      target: "200090001",
+      reason: "transport-map-unavailable",
+    },
+  ]);
 });
