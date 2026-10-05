@@ -83,10 +83,14 @@ Hall-of-Fame PlayerNPC and party-quest progress calls are explicit unavailable
 services. `cm.canSpawnPlayerNpc` is a local read that is false below the
 reference class cap (`Character.getMaxClassLevel`: Cygnus 120, otherwise 200),
 so instructors reach their job dialogue; at the cap it still traps as
-`hall-of-fame-player-npc`. Source quests absent from the original Quest Check inventory, including
-Dark Lord's server-custom100009/100011, are explicit lazy `custom-quest-progress`
-traps: a reached call fails the whole turn, rather than fabricating quest records
-or blocking an unrelated beginner branch. Advanced-job mutations are refused
+`hall-of-fame-player-npc`. The 2nd-job server-custom quests 100000–100011
+(instructor letters, test entry and proof; `client/src/quests/custom-quests.js`)
+are state-only: they live in `profile.quests` like Cosmic's queststatus rows,
+with no record, mob counters, rewards or journal entry, so existing saves need
+no migration. Other source quests absent from the original Quest Check
+inventory (for example the 3rd-job 100200 family) remain explicit lazy
+`custom-quest-progress` traps: a reached call fails the whole turn, rather than
+fabricating quest records or blocking an unrelated beginner branch. Advanced-job mutations are refused
 without changing the draft's published state.
 
 Kyrin's `scripts/npc/1090000.js` uses the same first-job transaction for job0→500

@@ -1,3 +1,4 @@
+import { isCustomQuest } from "../src/quests/custom-quests.js";
 import {
   call,
   cmMethod,
@@ -86,13 +87,15 @@ const QUEST_CALLS = new Set([
   "completeQuest",
 ]);
 
-/** A server custom quest without original Check/Info authority remains an explicit lazy trap. */
+/** A server custom quest without original Check/Info authority remains an explicit lazy trap,
+ *  except the closed state-only set in custom-quests.js. */
 export function npcMissingQuestService(context, node) {
   const id = node?.arguments?.[0]?.value;
   return QUEST_CALLS.has(cmMethod(node)) &&
     Number.isSafeInteger(id) &&
     context.originalQuestIds &&
-    !context.originalQuestIds.has(id)
+    !context.originalQuestIds.has(id) &&
+    !isCustomQuest(id)
     ? "custom-quest-progress"
     : null;
 }

@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { compileNpcScript } from "../tools/npc-script-compiler.js";
 import { NpcScriptSession } from "../src/npc/npc-script-runtime.js";
-import { createProfile } from "../src/profile/profile-validation.js";
+import {
+  createProfile,
+  validateProfile,
+} from "../src/profile/profile-validation.js";
 import { ProfileStore } from "./fixtures/memory-profile-store.js";
 import { grantItem, itemCount } from "../src/items/inventory-model.js";
 
@@ -141,4 +144,44 @@ test("leaving Kyrin's test room removes every carried crystal of both kinds", as
   } finally {
     await owner.store.destroy();
   }
+});
+
+async function advance(session, actions) {
+  let result;
+  for (const [action, value] of actions) {
+    result = await respond(session, action, value);
+    expect(result.ok).toBe(true);
+  }
+  return result;
+}
+
+test("custom letter quests 100003/100004 persist through the instructor and test gate", async () => {
+  const owner = character();
+  try {
+    const balrog = talk(owner, 1022000);
+    expect((await balrog.start()).ok).toBe(true);
+    await advance(balrog, [["next"], ["next"]]);
+    let profile = owner.store.profile;
+    expect(profile.quests[100003]).toEqual({ state: 1, kills: {} });
+    expect(itemCount(profile, 4031008)).toBe(1);
+    const saved = JSON.parse(JSON.stringify(profile));
+    expect(validateProfile(saved, owner.items)).toEqual(profile);
+
+    const gate = talk(owner, 1072000);
+    expect((await gate.start()).view.text).toContain("Dances with Balrog");
+    await advance(gate, [["next"], ["next"], ["next"], ["yes"], ["next"]]);
+    profile = owner.store.profile;
+    expect(profile.quests[100003].state).toBe(2);
+    expect(profile.quests[100004]).toEqual({ state: 1, kills: {} });
+    expect(itemCount(profile, 4031008)).toBe(0);
+    expect(owner.travels).toEqual([{ mapId: 108000300, portal: 0 }]);
+  } finally {
+    await owner.store.destroy();
+  }
+});
+
+test("a custom quest record cannot carry mob progress", () => {
+  const profile = createProfile({ mapId: "102000003", x: 0, y: 0, facing: 1 });
+  profile.quests[100003] = { state: 1, kills: { 100100: 1 } };
+  expect(() => validateProfile(profile)).toThrow("quest 100003 kills");
 });

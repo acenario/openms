@@ -190,7 +190,7 @@ test("pure GameConstants calls use scalar jobs while reached server operations r
     cm.dispose();
   }`);
   const remote = compile(
-    `function start() { cm.gainMeso(20); cm.startQuest(100009); cm.dispose(); }`,
+    `function start() { cm.gainMeso(20); cm.startQuest(100200); cm.dispose(); }`,
   );
   try {
     expect(pure.blockers).toEqual([]);

@@ -27,6 +27,7 @@ import {
   createGameOptions,
   validateGameOptions,
 } from "./profile-game-options.js";
+import { isCustomQuest } from "../quests/custom-quests.js";
 import {
   validateItemUpgrade,
   validatePets,
@@ -349,6 +350,8 @@ function quests(value) {
       PROFILE_LIMITS.kills,
       "quest kills",
     );
+    // Custom quests are state-only; mob progress would have no original target.
+    if (isCustomQuest(id) && targets.length) invalid(`quest ${id} kills`);
     total += targets.length;
     if (total > PROFILE_LIMITS.totalKills) invalid("total quest kill capacity");
     for (const target of targets) {

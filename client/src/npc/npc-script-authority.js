@@ -10,6 +10,7 @@ import { SAVED_LOCATION_TYPES } from "../profile/profile-domains.js";
 import { recalculateVitals } from "../character/character-stats.js";
 import { jobAdvancementGrowthRange } from "../character/offline-progression.js";
 import { skillPointPool } from "../skills/skill-allocation-rules.js";
+import { isCustomQuest } from "../quests/custom-quests.js";
 import {
   NPC_RUNTIME_LIMITS as LIMITS,
   npcInteger,
@@ -124,6 +125,7 @@ function validateCatalogDependencies(dependencies, environment) {
     );
   }
   for (const id of dependencies.questIds) {
+    if (isCustomQuest(id)) continue; // State-only; no original record exists.
     requireNpc(
       npcLookup(environment.quests.records, id)?.id === id,
       `Original quest ${id} is unavailable`,
@@ -213,6 +215,11 @@ function compatibleQuestInfo(record) {
 /** Force transitions bypass Check/Act gates/rewards, but not unavailable progress state. */
 export function admitNpcForceQuests(context, environment) {
   if (!context.forceQuests) return;
+  // State-only custom quests have no original Check inventory to admit.
+  const original = [...context.forceQuestIds].filter(
+    (id) => !isCustomQuest(id),
+  );
+  if (!original.length) return;
   const rows = environment.quests.inventory?.Check?.rows;
   requireNpc(
     Array.isArray(rows) && rows.length <= MAX_QUEST_INVENTORY_ROWS,
@@ -220,7 +227,7 @@ export function admitNpcForceQuests(context, environment) {
     "npc-quest-definition",
   );
   const seen = new Set();
-  for (const id of context.forceQuestIds) {
+  for (const id of original) {
     compatibleQuestInfo(npcLookup(environment.quests.records, id));
   }
   for (const row of rows) {
@@ -242,7 +249,7 @@ export function admitNpcForceQuests(context, environment) {
       "npc-quest-definition",
     );
   }
-  for (const id of context.forceQuestIds) {
+  for (const id of original) {
     requireNpc(
       seen.has(id),
       "Force quest Check definition is missing",
@@ -758,7 +765,7 @@ function questEffect(turn, node, args) {
 
 function questKills(turn, id, state, previous) {
   const kills = state === 1 ? { ...(previous?.kills ?? {}) } : {};
-  if (state === 1) {
+  if (state === 1 && !isCustomQuest(id)) {
     const record = npcLookup(turn.environment.quests.records, id);
     for (const stage of record.stages) {
       for (const mob of stage.check.mobs) {

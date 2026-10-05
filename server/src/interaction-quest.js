@@ -10,6 +10,7 @@ import {
   transaction,
 } from "../../client/src/quests/quest-rules.js";
 import { questObjectives } from "../../client/src/quests/quest-journal-model.js";
+import { isCustomQuest } from "../../client/src/quests/custom-quests.js";
 import { learnedGrowth } from "../../client/src/character/offline-progression.js";
 import {
   currentNpc,
@@ -191,7 +192,8 @@ export function progressQuestViews(actor, world) {
   const views = [];
   const system = { catalog: onlineQuestCatalog(world.content) };
   for (const [key, progress] of entries) {
-    if (progress.state === 0) continue;
+    // State-only custom quests have no journal record.
+    if (progress.state === 0 || isCustomQuest(key)) continue;
     const id = Number(key);
     const record = onlineQuestCatalog(world.content).records[id];
     requireInteraction(record, "CONTENT_MISMATCH");
