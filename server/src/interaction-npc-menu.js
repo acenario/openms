@@ -1,5 +1,10 @@
 import { onlineQuestCatalog } from "./quest-lifecycle.js";
-import { startQuestDialogue } from "./interaction-quest-dialogue.js";
+import {
+  silentQuestAction,
+  startQuestDialogue,
+} from "./interaction-quest-dialogue.js";
+import { commitSilentQuest } from "./interaction-quest.js";
+import { operationFor } from "./action-rules.js";
 import {
   NPC_MENU_HEADINGS,
   npcQuestGroup,
@@ -88,5 +93,26 @@ export function answerNpcMenu(actor, message, world, lease) {
     "NOT_ALLOWED",
   );
   startQuestDialogue(actor, world, lease, answer.choiceId);
-  return interactionReceipt(lease.step);
+  return (
+    silentMenuQuest(actor, message, world, lease) ??
+    interactionReceipt(lease.step)
+  );
+}
+
+/** The conversation-domain answer carries the commit, as an NPC script turn does. */
+function silentMenuQuest(actor, message, world, lease) {
+  if (!silentQuestAction(lease)) return null;
+  const silent = {
+    operation: {
+      ...operationFor(message),
+      domainRevision: message.action.step,
+    },
+    domainRevision: lease.step + 1,
+  };
+  return commitSilentQuest(actor, message, world, silent).then((receipt) => {
+    if (receipt?.status === "committed") {
+      world.publish(actor, { type: "snapshot-request" });
+    }
+    return receipt;
+  });
 }

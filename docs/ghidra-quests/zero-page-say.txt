@@ -1,0 +1,144 @@
+# Original quest Say presentation for a stage without numeric pages (kind: disassembly, not source)
+# Binary: Maplestory_UNPACKED.exe  sha256 1198fa57ca5a7c489bae43ec13c69681d9cabe0f96762f3dc0357facf2e7d4df
+# Ghidra 12.0.4 headless, x86:LE:32:default:windows, -noanalysis -readOnly
+# Recovered with: analyzeHeadless artifacts/ghidra-scratch lag -process Maplestory_UNPACKED.exe \
+#   -noanalysis -readOnly -scriptPath docs/tools -postScript clientInstructions.java OUT \
+#   00717175:0071718f,007171ba:007171c4,0071736c:00717384,007173a6:007173b0,007173cf:007173e8,\
+#   0071740d:00717452,00717740:00717791,0071794f:00717961,00717963:007179b2,00718070:00718088,\
+#   00717457:0071746f,007174d6:007174ee
+# Context: clientFocus.java 00716fe1,00717740,00717963,00716541,00720fab; clientStrings.java
+#   (string 0xc8c = "Quest/Say.img", 0xc8e = "ask").
+#
+# Reading:
+# - 00716fe1 opens Say.img/<quest>/<stage> (0xc8c). If that node is null (0071736c -> 00717414),
+#   the result is the caller's stack argument [EBP+8]; not established here.
+# - Otherwise child "ask" (0xc8e, read by 00414d40) picks 00717740 (zero) or 00717963 (nonzero).
+# - Both collect pages with 00716541. A null or empty list jumps to "return 1"
+#   (00717775/00717781 -> 0071794f; 007179a0/007179ac -> 00718070). No dialog is created.
+# - A nonzero result reaches 00717434: stage 1 calls 0071808a (reward selection; 0x7fffffff
+#   aborts) then sends opcode 0x6b action 2; stage 0 sends opcode 0x6b action 1.
+# - So a present Say stage with no pages accepts/completes as soon as the quest is selected.
+
+## 00716fe1: nonzero 00720fab skips Say entirely (predicate not identified); then Say.img
+00717175 MOV ECX,dword ptr [0x00bed614]
+0071717b XOR EAX,EAX
+0071717d MOV AX,word ptr [ESI + 0xc]
+00717181 PUSH EAX
+00717182 CALL 0x00720fab
+00717187 TEST EAX,EAX
+00717189 JNZ 0x00717434
+007171ba PUSH 0xc8c
+007171bf PUSH EAX
+007171c0 MOV byte ptr [EBP + -0x4],0x4
+
+## 00716fe1: null stage node, ask dispatch, nonzero result -> packet
+0071736c CMP dword ptr [EDI],EBX
+0071736e JZ 0x00717414
+00717374 PUSH EBX
+00717375 PUSH ECX
+00717376 MOV EAX,ESP
+00717378 MOV dword ptr [EBP + 0x8],ESP
+0071737b PUSH 0xc8e
+00717380 PUSH EAX
+00717381 CALL 0x0079e805
+007173a6 PUSH EAX
+007173a7 MOV byte ptr [EBP + -0x4],0x12
+007173ab CALL 0x00414d40
+007173cf CMP EDI,EBX
+007173d1 LEA EAX,[EBP + -0x10]
+007173d4 PUSH EAX
+007173d5 MOV ECX,ESI
+007173d7 JNZ 0x0071740d
+007173d9 CALL 0x00717740
+007173de TEST EAX,EAX
+007173e0 MOV EAX,dword ptr [EBP + -0x14]
+007173e3 MOV byte ptr [EBP + -0x4],0x8
+007173e7 JNZ 0x00717419
+0071740d CALL 0x00717963
+00717412 JMP 0x007173de
+00717414 CMP dword ptr [EBP + 0x8],EBX
+00717417 JMP 0x007173e0
+00717419 CMP EAX,EBX
+0071741b JZ 0x00717423
+0071741d MOV ECX,dword ptr [EAX]
+0071741f PUSH EAX
+00717420 CALL dword ptr [ECX + 0x8]
+00717423 MOV EAX,dword ptr [EBP + -0x18]
+00717426 CMP EAX,EBX
+00717428 MOV byte ptr [EBP + -0x4],0x2
+0071742c JZ 0x00717434
+0071742e MOV ECX,dword ptr [EAX]
+00717430 PUSH EAX
+00717431 CALL dword ptr [ECX + 0x8]
+00717434 CMP dword ptr [ESI + 0x14],0x1
+00717438 JNZ 0x007174d6
+0071743e LEA EAX,[EBP + -0x10]
+00717441 PUSH EAX
+00717442 MOV ECX,ESI
+00717444 CALL 0x0071808a
+00717449 MOV EDI,EAX
+0071744b CMP EDI,0x7fffffff
+00717451 JZ 0x0071754f
+
+## 00717434: quest action packet (stage 1 complete = 2, stage 0 start = 1)
+00717457 PUSH 0x6b
+00717459 LEA ECX,[EBP + -0x34]
+0071745c CALL 0x006ec9ce
+00717461 PUSH 0x2
+00717463 LEA ECX,[EBP + -0x34]
+00717466 MOV byte ptr [EBP + -0x4],0x13
+0071746a CALL 0x00406549
+007174d6 PUSH 0x6b
+007174d8 LEA ECX,[EBP + -0x4c]
+007174db CALL 0x006ec9ce
+007174e0 PUSH 0x1
+007174e2 LEA ECX,[EBP + -0x4c]
+007174e5 MOV byte ptr [EBP + -0x4],0x14
+007174e9 CALL 0x00406549
+
+## 00717740 (ask == 0): null/empty page list returns 1
+00717760 CALL 0x004281c2
+00717765 MOV ECX,ESI
+00717767 CALL 0x00716541
+0071776c XOR EDI,EDI
+0071776e MOV dword ptr [EBP + 0x8],EDI
+00717771 MOV EAX,dword ptr [EBX]
+00717773 CMP EAX,EDI
+00717775 JZ 0x0071794f
+0071777b MOV EAX,dword ptr [EAX + -0x4]
+0071777e CMP dword ptr [EBP + 0x8],EAX
+00717781 JNC 0x0071794f
+0071794f PUSH 0x1
+00717951 POP EAX
+00717952 MOV ECX,dword ptr [EBP + -0xc]
+00717955 POP EDI
+00717956 POP ESI
+00717957 MOV dword ptr FS:[0x0],ECX
+0071795e POP EBX
+0071795f LEAVE
+00717960 RET 0x4
+
+## 00717963 (ask != 0): null/empty page list returns 1
+00717985 CALL 0x004281c2
+0071798a MOV ECX,EDI
+0071798c CALL 0x00716541
+00717991 XOR EBX,EBX
+00717993 MOV dword ptr [EBP + -0x18],EBX
+00717996 MOV dword ptr [EBP + -0x2c],EBX
+00717999 MOV ESI,dword ptr [EBP + 0x8]
+0071799c MOV EAX,dword ptr [ESI]
+0071799e CMP EAX,EBX
+007179a0 JZ 0x00718070
+007179a6 MOV ECX,dword ptr [EAX + -0x4]
+007179a9 CMP dword ptr [EBP + -0x18],ECX
+007179ac JNC 0x00718070
+00718070 PUSH 0x1
+00718072 POP EAX
+00718073 MOV ECX,dword ptr [EBP + -0xc]
+00718076 LEA ESP,[EBP + 0xffffff58]
+0071807c POP EDI
+0071807d POP ESI
+0071807e MOV dword ptr FS:[0x0],ECX
+00718085 POP EBX
+00718086 LEAVE
+00718087 RET 0x4

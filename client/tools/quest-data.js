@@ -348,7 +348,7 @@ function pages(raw) {
 }
 
 /** Missing selected stop text advances at 00717ddd..00717e2a; nonempty text terminates. */
-function dialogue(input, source, blockers) {
+function dialogue(input) {
   const result = {
     pages: pages(input),
     yes: pages(input?.yes),
@@ -361,12 +361,18 @@ function dialogue(input, source, blockers) {
     if (NUMERIC.test(key)) result.choices[key] = branch;
     else result.stop[key] = pages(branch);
   }
-  validateDialoguePages(result, source, blockers);
   return result;
 }
 
-function validateDialoguePages(result, source, blockers) {
-  if (!result.pages.length) {
+/**
+ * A present Say stage without numeric pages sends its accept/complete action
+ * without dialogue (00717740/00717963 return 1 at 0071794f/00718070). An absent
+ * stage follows the caller's argument at 0071736c and stays blocked, as does a
+ * stage whose Act retains numeric text: Act text is never substituted.
+ */
+function validateDialoguePages(result, { say, act }, source, blockers) {
+  if (!say) problem(blockers, source, "Missing Say dialogue stage");
+  else if (!result.pages.length && pages(act).length) {
     problem(
       blockers,
       source,
@@ -533,6 +539,13 @@ function compileStage(id, stage, images, blockers) {
       "Missing stage conditions or actions",
     );
   }
+  const sayResult = dialogue(say);
+  validateDialoguePages(
+    sayResult,
+    { say, act },
+    `Quest.wz:Say.img/${path}`,
+    blockers,
+  );
   return {
     check: conditions(check, `Quest.wz:Check.img/${path}`, blockers),
     actionCheck: conditions(
@@ -541,7 +554,7 @@ function compileStage(id, stage, images, blockers) {
       blockers,
     ),
     act: actions(act, `Quest.wz:Act.img/${path}`, blockers),
-    say: dialogue(say, `Quest.wz:Say.img/${path}`, blockers),
+    say: sayResult,
   };
 }
 

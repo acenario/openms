@@ -44,6 +44,7 @@ The complete discovery inventory identified 40 named Check condition families. T
 | `007166b6`, `00716926` | Act item presentation/filtering; job mask tests `1 << ((job / 100) & 31)`, with family 9 exemption; gender default 2 means unrestricted. Restricted-gender declarative rewards remain blocked by this interpreter even though schema 5 now stores character gender. |
 | `0071808a` | Original completion reward/selection presentation, item/meso/EXP/fame display and selected-item result. |
 | `00716fe1`, `007171ba` | Loads dialogue from `Quest/Say.img`, quest ID and stage. |
+| `00717740`, `00717963`, `00717434` ([retained](ghidra-quests/zero-page-say.txt)) | An empty page list returns 1 without a dialog; the caller then sends the start/complete action (opcode `0x6b`, action 1/2). |
 | `00717963`, `007179e9` | Numeric dialogue sequence with `stop/<page>/<selected-choice>` branch lookup. |
 | `00717ddd`–`00717e2a` | Nonempty selected stop text is displayed and terminates the conversation; absent/empty selected stop text advances. Thus a naive `answer - 1` evaluator is not used. `answer` metadata remains in the inventory/projection. |
 | `00717b36` | `flip` activates an additional native text/speaker presentation path. That path remains unsupported; it is not guessed from the field name. |
@@ -53,7 +54,7 @@ Original packet delivery, authorization, rollback/error behavior, reward generat
 
 ## Field classification and implemented projections
 
-Every classification is recorded per source node, with an exact source-path reason for unsupported nodes. A quest with an unsupported mandatory condition/action/control or dialogue branch is not admitted. Missing Check/Act stages and missing numeric Say dialogue pages are explicit blockers. Original Act-embedded strings are retained but never substituted for missing Say pages: quest 1029, for example, contains Korean Act text alongside distinct English Say text.
+Every classification is recorded per source node, with an exact source-path reason for unsupported nodes. A quest with an unsupported mandatory condition/action/control or dialogue branch is not admitted. Missing Check/Act/Say stages are explicit blockers. A present Say stage with no numeric pages is admitted: the [original presentation](ghidra-quests/zero-page-say.txt) collects pages in `00717740`/`00717963`, returns 1 for an empty list (`0071794f`/`00718070`) and `00717434` then sends the start/complete action without a dialog. The online authority therefore commits such a stage when it is selected from the NPC menu or Medal window, inside that selecting operation; a stage that offers a reward choice keeps its confirmation for the `0071808a` selection. An absent Say stage follows a caller argument at `0071736c` and stays blocked. Original Act-embedded strings are retained but never substituted: an empty Say stage whose Act stage carries numeric text stays blocked (quest 1029, for example, contains Korean Act text alongside distinct English Say text). Completion stages carrying only `stop` text, such as 1037 stage 1, are the authored no-speech shape.
 
 ### Check
 

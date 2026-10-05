@@ -53,23 +53,44 @@ export function startQuestDialogue(actor, world, lease, questId) {
   lease.step++;
   lease.menu = null;
   lease.view = null;
+  if (silentQuestAction(lease)) {
+    grantQuestOffer(actor, lease, view);
+    return;
+  }
   return publishQuestDialogue(actor, world, lease);
 }
 
-export function publishQuestDialogue(actor, world, lease) {
-  const dialogue = lease.questDialogue;
-  dialogue.system.store.profile = actor.profile;
-  const view = dialogue.snapshot();
+/**
+ * Original 00717740/00717963 return 1 for a Say stage without pages, so the
+ * client sends the accept/complete action with no dialogue. A reward choice
+ * still needs the 0071808a selection, so that shape keeps its confirmation.
+ */
+export function silentQuestAction(lease) {
+  const view = lease.questDialogue?.snapshot();
+  if (view?.mode !== "confirm" || view.pageCount || view.rewardChoices.length) {
+    return null;
+  }
+  return view.stage === 0 ? "quest.accept" : "quest.claim";
+}
+
+function grantQuestOffer(actor, lease, view) {
   lease.offers = [];
   if (
     view.mode === "confirm" &&
-    status(dialogue.record, lease.npcTemplateId, actor.profile).ok
+    status(lease.questDialogue.record, lease.npcTemplateId, actor.profile).ok
   ) {
     lease.offers.push({
       questId: view.questId,
       action: view.stage === 0 ? "accept" : "claim",
     });
   }
+}
+
+export function publishQuestDialogue(actor, world, lease) {
+  const dialogue = lease.questDialogue;
+  dialogue.system.store.profile = actor.profile;
+  const view = dialogue.snapshot();
+  grantQuestOffer(actor, lease, view);
   if (view.mode === "closed") {
     closeConversation(actor, world);
     return;
