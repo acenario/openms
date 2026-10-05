@@ -531,8 +531,9 @@ export class OnlineWorld {
       throw protocolError("SERVER_BUSY");
     }
     field.tick++;
-    for (const actor of field.characters.values())
+    for (const actor of field.characters.values()) {
       this.moveActorIsolated(actor);
+    }
     advanceCombat(this, field);
     advanceDrops(this, field);
     advanceReactors(this, field, PROTOCOL.TICK_MS);

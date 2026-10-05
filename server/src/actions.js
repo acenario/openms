@@ -344,7 +344,8 @@ async function executeQueuedAction(actor, message, world) {
       character: actor.id,
       code: error.errno ?? error.code ?? error.name,
       reason: failure.code,
-      admission: actor.admission === undefined ? undefined : String(actor.admission),
+      admission:
+        actor.admission === undefined ? undefined : String(actor.admission),
       skillId: message.action.skillId,
     });
     // Rejections are receipts too; no mutated draft is ever installed on this path.
