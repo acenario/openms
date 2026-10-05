@@ -95,7 +95,8 @@ test("selecting Maria's zero-page completion commits through executeQuest", asyn
     domainRevision: step,
   });
   expect(probe.actor.profile.quests[1037].state).toBe(2);
-  expect(probe.actor.profile.level).toBe(2); // Act exp 60 crosses level 1.
+  // Act exp 60 from level 1: the original client table needs 15 (1→2) + 34 (2→3), so it lands on level 3.
+  expect(probe.actor.profile.level).toBe(3);
   expect(probe.actor.conversation).toBeNull();
   expect(probe.events.some((event) => event.event?.kind === "dialogue")).toBe(
     false,
