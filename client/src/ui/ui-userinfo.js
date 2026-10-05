@@ -4,6 +4,7 @@ import { PROFILE_LIMITS } from "../profile/profile-validation.js";
 import { replaceIcons } from "./ui-icons.js";
 import { itemTooltip } from "./ui-tooltip.js";
 import { monsterBookSummary } from "../character/monster-book.js";
+import { isCustomQuest } from "../quests/custom-quests.js";
 
 // 008ff863 mode-dependent original window dimensions and backgrounds.
 const MODES = [
@@ -382,7 +383,11 @@ function refreshCollection(panel, profile) {
   const data = panel.owner.hooks.monsterBook().data;
   const summary = monsterBookSummary(profile.monsterBook);
   const medals = Object.entries(profile.quests)
-    .filter(([id, state]) => Number(id) >= 29000 && state.state === 2)
+    // Custom job quests (100000–100011) share the ≥29000 range but are state-only rows, not medals.
+    .filter(
+      ([id, state]) =>
+        Number(id) >= 29000 && state.state === 2 && !isCustomQuest(id),
+    )
     .sort(([left], [right]) => Number(left) - Number(right));
   const equipped = profile.equipment.find((item) => item.slot === -49);
   const count = Math.max(1, medals.length - 3);
