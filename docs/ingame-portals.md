@@ -128,7 +128,7 @@ Six vendored events share one canonical cycle and compile through the closed rea
 
 `server/src/transport-schedule.js` evaluates the cycle as a pure function of wall-clock time anchored at the Unix epoch (OpenMS policy; Cosmic anchors at channel start), so restarts keep one timetable and no timer state is persisted. Moves are level-triggered: a waiting room while undocked is `takeoff` plus that room's `onUserEnter` `warpAhead`; a ride map while docked is `arrived`. Each move is an ordinary server-produced transition (`transport.travel`) retried after refusal. Ticket NPCs admit `cm.getEventManager("<published transport>")` and its `getProperty`; the property snapshot is refreshed when the turn commits, so a departure in between refuses the boarding warp. Any other event manager name keeps the `event-instance` trap.
 
-| Boats.js (Ellinia ↔ Orbis) | Authored (`travelRate` 1) | Default `travelRate` 5 |
+| Boats.js (Ellinia ↔ Orbis) | Default (`travelRate` 1, authored) | `travelRate` 5 |
 | --- | ---: | ---: |
 | Entry closes (`closeTime`) | 4 min | 48 s |
 | Takeoff (`beginTime`) | 5 min | 60 s |

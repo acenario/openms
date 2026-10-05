@@ -27,7 +27,7 @@ function source(path) {
   };
 }
 
-function boats(travelRate = POLICY.travelRate) {
+function boats(travelRate = 5) {
   return {
     ...compileTransportSchedule(source("event/Boats.js")),
     travelRate,
@@ -80,7 +80,7 @@ test("travelRate scales the cycle like getTransportationTime; rate 1 is v83", ()
     ride: 600000,
     period: 900000,
   });
-  expect(POLICY.travelRate).toBe(5);
+  expect(POLICY.travelRate).toBe(1);
   expect(transportTimes(boats())).toEqual({
     close: 48000,
     begin: 60000,

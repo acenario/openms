@@ -22,7 +22,7 @@ The source files are data for the bounded compiler, never directly evaluated as 
 | Setting | Imported value | Consumer |
 | --- | --- | --- |
 | `enhancedCrafting` | `false` | Crafting policy, from `USE_ENHANCED_CRAFTING` |
-| `travelRate` | `5` | Transport schedules: `em.getTransportationTime(t)` = `ceil(t / travelRate)` (Cosmic world `travel_rate`). OpenMS choice; `1` restores the authored v83 cadence |
+| `travelRate` | `1` | Transport schedules: `em.getTransportationTime(t)` = `ceil(t / travelRate)` (Cosmic world `travel_rate`). `1` is the authored v83 cadence; larger values shorten every scaled wait |
 | `staticConfig.USE_CPQ` | `true` | NPC static branch compilation |
 | `staticConfig.USE_ENABLE_SOLO_EXPEDITIONS` | `false` | NPC static branch compilation |
 | `staticConfig.USE_AUTOASSIGN_STARTERS_AP` | `true` | NPC static branch compilation |

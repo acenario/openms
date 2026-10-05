@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "enhancedCrafting": false,
-  "travelRate": 5,
+  "travelRate": 1,
   "staticConfig": {
     "USE_CPQ": true,
     "USE_ENABLE_SOLO_EXPEDITIONS": false,
