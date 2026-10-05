@@ -7,8 +7,10 @@ import { NpcScriptSession } from "../../client/src/npc/npc-script-runtime.js";
 import { createProfile } from "../../client/src/profile/profile-validation.js";
 import { ProfileStore } from "../../client/test/fixtures/memory-profile-store.js";
 import { itemCount } from "../../client/src/items/inventory-model.js";
+import { createSimulation } from "../../client/src/physics/simulation.js";
 import {
   advanceTransports,
+  invasionRoll,
   transportProperties,
   transportState,
   transportTimes,
@@ -69,8 +71,62 @@ test("Boats.js keeps its authored times, maps and unsupported members", () => {
     to: 101000300,
     portal: 1,
   });
-  expect(schedule.unsupported).toContain("random-invasion");
-  expect(schedule.unsupported).toContain("ship-presentation");
+  expect(schedule.unsupported).toEqual([
+    "field-object-clearing",
+    "music-change",
+    "ship-presentation",
+  ]);
+});
+
+test("Boats.js publishes its authored Crimson Balrog invasion", () => {
+  const deck = (mapId, x, y) => ({ mapId, mobId: 8150000, x, y });
+  expect(boats().invasion).toEqual({
+    chance: 0.42,
+    approachChance: 1,
+    approachTime: { ms: 180000, scaled: true },
+    approachJitter: { ms: 60000, scaled: true },
+    spawnDelay: { ms: 5000, scaled: false },
+    spawns: [
+      deck(200090000, -538, 143),
+      deck(200090000, -538, 143),
+      deck(200090010, 339, 148),
+      deck(200090010, 339, 148),
+    ],
+  });
+  for (const event of ["Trains", "Subway", "Cabin", "Genie", "AirPlane"]) {
+    expect(
+      compileTransportSchedule(source(`event/${event}.js`)).invasion,
+    ).toBeUndefined();
+  }
+});
+
+/** Departures of the default-rate cycle (period 180 s, takeoff 60 s in). */
+const takeoffOf = (index) => index * 180000 + 60000;
+
+test("the invasion roll uses the authored chance and is stable per departure", () => {
+  const schedule = boats();
+  let invaded = 0;
+  for (let index = 0; index < 4000; index++) {
+    const roll = invasionRoll(schedule, takeoffOf(index));
+    expect(invasionRoll(schedule, takeoffOf(index))).toEqual(roll);
+    if (!roll) continue;
+    invaded++;
+    // 36 s + trunc(random * 12 s) + unscaled 5 s after takeoff, before arrival.
+    const after = roll.spawnAt - takeoffOf(index);
+    expect(after).toBeGreaterThanOrEqual(41000);
+    expect(after).toBeLessThan(53000);
+  }
+  expect(invaded / 4000).toBeGreaterThan(0.39);
+  expect(invaded / 4000).toBeLessThan(0.45);
+  // Travel rate 1 keeps the authored 3 min + up to 1 min, plus 5 s.
+  const index = [...Array(100).keys()].find((k) =>
+    invasionRoll(boats(1), k * 900000 + 300000),
+  );
+  const after =
+    invasionRoll(boats(1), index * 900000 + 300000).spawnAt -
+    (index * 900000 + 300000);
+  expect(after).toBeGreaterThanOrEqual(185000);
+  expect(after).toBeLessThan(245000);
 });
 
 test("travelRate scales the cycle like getTransportationTime; rate 1 is v83", () => {
@@ -215,6 +271,8 @@ function transportWorld(now) {
   const world = {
     now,
     actors: new Map([[actor.id, actor]]),
+    fields: new Map(),
+    invalidateField: () => {},
     participants: { busy: () => false, signalIdle: () => {} },
     interactions: {
       references: { data: { transportSchedules: { Boats: boats() } } },
@@ -256,4 +314,112 @@ test("a boarded passenger departs at the scaled takeoff and arrives in Orbis", a
   await settle();
   expect(moves[1]).toEqual({ at: start + 180000, mapId: 200000100, portal: 0 });
   expect(actor.field.mapId).toBe(200000100);
+});
+
+/** A one-floor ride field carrying a Crimson Balrog template (y 200 under every spawn). */
+function rideField(mapId) {
+  const physics = {
+    schemaVersion: 1,
+    // Positive placeholders: the stationary fixture mob never reads them.
+    globals: Object.fromEntries(
+      "walkForce walkSpeed walkDrag slipForce slipSpeed floatDrag1 floatDrag2 floatCoefficient swimForce swimSpeed flyForce flySpeed gravityAcc fallSpeed jumpSpeed maxFriction minFriction swimSpeedDec flyJumpDec"
+        .split(" ")
+        .map((key) => [key, 1]),
+    ),
+    map: {},
+    footholds: [
+      { id: 1, layer: 1, group: 0, x1: -800, y1: 200, x2: 800, y2: 200 },
+    ].map((row) => ({ ...row, prev: 0, next: 0, properties: {} })),
+    ladders: [],
+  };
+  const stand = {
+    timingKnown: true,
+    frames: [
+      { delayMs: 180, body: { left: -4, top: -8, right: 6, bottom: 0 } },
+    ],
+  };
+  const template = {
+    kind: "mob",
+    originalId: "8150000",
+    defaultAction: "stand",
+    info: { maxHP: 1000, speed: 0 },
+    actions: { stand },
+  };
+  return {
+    mapId,
+    physics,
+    geometry: createSimulation(physics, { x: 0, y: 200 }).geometry,
+    manifest: { life: { templates: { "mob:8150000": template } } },
+    mobs: [],
+    npcs: new Map(),
+    characters: new Map(),
+  };
+}
+
+function invasionWorld(invaded) {
+  const index = [...Array(100).keys()].find(
+    (k) => Boolean(invasionRoll(boats(), takeoffOf(k))) === invaded,
+  );
+  const takeoff = takeoffOf(index);
+  const { world, actor, moves } = transportWorld(takeoff - 60000);
+  const fields = [200090000, 200090010, 200090011].map(rideField);
+  for (const field of fields) world.fields.set(`public:${field.mapId}`, field);
+  const [ellinia, orbis, cabin] = fields;
+  return { world, actor, moves, takeoff, ellinia, orbis, cabin };
+}
+
+const invaders = (field) => field.mobs.filter((mob) => mob.invasion);
+
+test("an invaded ride spawns the authored Balrogs on the decks only; arrival removes them", async () => {
+  const { world, actor, moves, takeoff, ellinia, orbis, cabin } =
+    invasionWorld(true);
+  advanceTransports(world);
+  await settle();
+  await settle();
+  // A passenger rests in the Orbis-bound cabin, reached by the deck's in00 portal.
+  actor.field = { mapId: 200090011, epoch: "cabin" };
+  const { spawnAt } = invasionRoll(boats(), takeoff);
+  world.now = spawnAt - 1;
+  advanceTransports(world);
+  expect(invaders(orbis)).toEqual([]);
+  world.now = spawnAt;
+  advanceTransports(world);
+  for (const [field, x] of [
+    [ellinia, -538],
+    [orbis, 339],
+  ]) {
+    expect(
+      invaders(field).map((mob) => [mob.templateId, mob.x, mob.y]),
+    ).toEqual([
+      [8150000, x, 200],
+      [8150000, x, 200],
+    ]);
+  }
+  expect(cabin.mobs).toEqual([]);
+  expect(moves).toEqual([]);
+  // Level-triggered: later ticks keep the same two monsters.
+  const spawned = invaders(orbis);
+  world.now = spawnAt + 1000;
+  advanceTransports(world);
+  expect(invaders(orbis)).toEqual(spawned);
+  world.now = takeoff + 120000; // arrived: killAllMonsters + cabin warpEveryone
+  advanceTransports(world);
+  await settle();
+  expect(invaders(ellinia)).toEqual([]);
+  expect(invaders(orbis)).toEqual([]);
+  expect(moves).toEqual([
+    { at: takeoff + 120000, mapId: 200000100, portal: 0 },
+  ]);
+  expect(actor.field.mapId).toBe(200000100);
+});
+
+test("a ride whose invasion roll fails spawns nothing", async () => {
+  const { world, takeoff, ellinia, orbis } = invasionWorld(false);
+  advanceTransports(world);
+  await settle();
+  for (let at = takeoff; at < takeoff + 120000; at += 1000) {
+    world.now = at;
+    advanceTransports(world);
+    expect([...ellinia.mobs, ...orbis.mobs]).toEqual([]);
+  }
 });

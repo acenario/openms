@@ -5,19 +5,22 @@ import { integerLiteral, parseNpcSource } from "./npc-script-ir.js";
  * Cabin, Genie, AirPlane): init binds maps and scales times, scheduleNew docks and
  * opens entry, a stop callback closes entry, takeoff warps waiting rooms onto the
  * ride maps, arrived warps rides to their stations and reopens the cycle. Source is
- * parsed, never evaluated. Members with no server consumer (ship presentation,
- * cabin clearing, random Balrog invasion) are listed in `unsupported`.
+ * parsed, never evaluated. The Boats random invasion (takeoff's random approach →
+ * approach → invasion spawns, cleared by arrived's killAllMonsters) is published as
+ * `invasion`. Members with no server consumer (ship presentation, music, cabin
+ * clearing) are listed in `unsupported`.
  */
 const MAX_MAPS = 16;
 const MAX_STATEMENTS = 64;
+const MAX_SPAWNS = 16;
 const CALLBACKS = ["init", "scheduleNew", "takeoff", "arrived"];
 const PRESENTATION = new Map([
   ["setDocked", "ship-presentation"],
   ["broadcastShip", "ship-presentation"],
   ["broadcastEnemyShip", "ship-presentation"],
   ["clearMapObjects", "field-object-clearing"],
-  ["killAllMonsters", "field-monster-clearing"],
 ]);
+const JAVA_TYPES = new Set(["tools.PacketCreator", "server.life.LifeFactory"]);
 
 function fail(node, message) {
   const error = new Error(message);
@@ -76,7 +79,8 @@ function topLevel(root) {
   for (const node of root.body) {
     if (node.type === "VariableDeclaration") {
       for (const declaration of node.declarations) {
-        if (declaration.init && /Time$/.test(declaration.id.name)) {
+        // Boats' invasionDelay is the one authored time without the Time suffix.
+        if (declaration.init && /(Time|Delay)$/.test(declaration.id.name)) {
           times.set(declaration.id.name, constantTime(declaration.init));
         }
       }
@@ -103,24 +107,146 @@ function need(condition, node, message) {
   if (!condition) fail(node, message);
 }
 
-/** takeoff: `if (Math.random() < p) em.schedule("approach", …)` (Balrog invasion). */
-function randomBranch(state, node) {
-  const random = memberCall(node.test?.left);
+/** `Math.<method>(…)`, or null. */
+function mathCall(node, method) {
+  const call = memberCall(node);
+  return isIdentifier(call?.receiver, "Math") && call.method === method
+    ? call
+    : null;
+}
+
+/** `Math.random()` with no arguments. */
+function isRandom(node) {
+  return mathCall(node, "random")?.args.length === 0;
+}
+
+/**
+ * `if (Math.random() < p) {…}` or `if (Math.floor(Math.random() * n) < k) {…}`
+ * without else: the branch probability, p or min(k, n) / n.
+ */
+function randomChance(node) {
+  const test = node.test;
   need(
-    node.test?.type === "BinaryExpression" &&
-      isIdentifier(random?.receiver, "Math") &&
-      random.method === "random" &&
-      !node.alternate,
+    binary(test, "<") &&
+      typeof test.right.value === "number" &&
+      !node.alternate &&
+      node.consequent.type === "BlockStatement",
     node,
     "Unsupported transport branch",
   );
-  state.unsupported.add("random-invasion");
+  const limit = test.right.value;
+  if (isRandom(test.left)) {
+    need(limit > 0 && limit <= 1, node, "Transport chance out of range");
+    return limit;
+  }
+  const floor = mathCall(test.left, "floor");
+  const range = floor?.args.length === 1 ? randomRange(floor.args[0]) : null;
+  need(
+    range > 0 && Number.isSafeInteger(limit) && limit > 0,
+    node,
+    "Unsupported transport branch",
+  );
+  return Math.min(limit, range) / range;
+}
+
+function binary(node, operator) {
+  return node?.type === "BinaryExpression" && node.operator === operator;
+}
+
+/** `Math.random() * n` for an integer literal n, or null. */
+function randomRange(node) {
+  return binary(node, "*") && isRandom(node.left)
+    ? integerLiteral(node.right)
+    : null;
+}
+
+/** The name of an authored time variable, or null. */
+function timeName(state, node) {
+  return isIdentifier(node) && state.times.has(node.name) ? node.name : null;
+}
+
+/** `A + Math.trunc(Math.random() * B)` for authored times A and B, or null. */
+function jitteredTime(state, node) {
+  const trunc = binary(node, "+") ? mathCall(node.right, "trunc") : null;
+  const jitter = trunc?.args.length === 1 ? trunc.args[0] : null;
+  const base = trunc && timeName(state, node.left);
+  return base && binary(jitter, "*") && isRandom(jitter.left)
+    ? { base, jitter: timeName(state, jitter.right) }
+    : null;
+}
+
+/** takeoff: `if (Math.random() < p) em.schedule(name, A + Math.trunc(Math.random() * B))`. */
+function randomBranch(state, node) {
+  const chance = randomChance(node);
+  const [first, ...rest] = node.consequent.body;
+  const call = memberCall(first?.expression);
+  const [name, delay] = call?.args ?? [];
+  need(
+    !rest.length &&
+      isIdentifier(call?.receiver, "em") &&
+      call.method === "schedule" &&
+      call.args.length === 2 &&
+      typeof name.value === "string",
+    node,
+    "Unsupported transport branch",
+  );
+  const times = jitteredTime(state, delay);
+  need(times?.jitter, node, "Unsupported random transport time");
+  return { kind: "random-schedule", chance, name: name.value, ...times };
+}
+
+function isPoint(node) {
+  const callee = node?.callee;
+  return (
+    node.type === "NewExpression" &&
+    callee.type === "MemberExpression" &&
+    callee.property.name === "Point" &&
+    callee.object.property?.name === "awt" &&
+    isIdentifier(callee.object.object, "java") &&
+    node.arguments.length === 2
+  );
+}
+
+/** `const X = Java.type("…")`, `var m = <bound map>`, `var p = new java.awt.Point(x, y)`. */
+function declaration(state, node) {
+  const [{ id, init }, ...more] = node.declarations;
+  const fresh = (name) =>
+    ![state.maps, state.locals, state.times].some((names) => names.has(name));
+  need(
+    !more.length && isIdentifier(id) && init && fresh(id.name),
+    node,
+    "Unsupported declaration",
+  );
+  const call = memberCall(init);
+  if (isIdentifier(call?.receiver, "Java") && call.method === "type") {
+    const [type] = stringArgs(call, 1) ?? [];
+    need(JAVA_TYPES.has(type), node, `Unsupported Java type: ${type}`);
+    state.locals.set(id.name, { java: type });
+  } else if (isIdentifier(init) && state.maps.has(init.name)) {
+    state.maps.set(id.name, state.maps.get(init.name));
+  } else {
+    need(isPoint(init), node, "Unsupported declaration");
+    const [x, y] = init.arguments.map(integerLiteral);
+    need(x !== null && y !== null, node, "Point must be integer literals");
+    state.locals.set(id.name, { point: { x, y } });
+  }
   return { kind: "ignored" };
+}
+
+/** `X.method(…)` where X was declared `Java.type(type)`, or null. */
+function javaCall(state, node, type, method) {
+  const call = memberCall(node);
+  return isIdentifier(call?.receiver) &&
+    state.locals.get(call.receiver.name)?.java === type &&
+    call.method === method
+    ? call
+    : null;
 }
 
 /** One recognized statement of a transport callback. */
 function statement(state, node) {
   if (node.type === "IfStatement") return randomBranch(state, node);
+  if (node.type === "VariableDeclaration") return declaration(state, node);
   need(node.type === "ExpressionStatement", node, "Unsupported statement");
   const expression = node.expression;
   if (expression.type === "AssignmentExpression") {
@@ -219,10 +345,57 @@ function boundMap(state, node) {
   return state.maps.get(target.receiver.name);
 }
 
+/** arrived: `M.killAllMonsters()`. */
+function clearCall(state, call, node) {
+  need(!call.args.length, node, "killAllMonsters takes no arguments");
+  return { kind: "clear", mapId: state.maps.get(call.receiver.name) };
+}
+
+/** approach: `M.broadcastMessage(PacketCreator.musicChange("…"))`, presentation only. */
+function musicCall(state, call, node) {
+  const music = javaCall(
+    state,
+    call.args[0],
+    "tools.PacketCreator",
+    "musicChange",
+  );
+  need(
+    call.args.length === 1 && music && stringArgs(music, 1),
+    node,
+    "Unsupported transport broadcast",
+  );
+  state.unsupported.add("music-change");
+  return { kind: "ignored" };
+}
+
+/** invasion: `M.spawnMonsterOnGroundBelow(LifeFactory.getMonster(N), point)`. */
+function spawnCall(state, call, node) {
+  const [mob, at] = call.args;
+  const monster = javaCall(state, mob, "server.life.LifeFactory", "getMonster");
+  const mobId = monster?.args.length === 1 && integerLiteral(monster.args[0]);
+  const point = isIdentifier(at) ? state.locals.get(at.name)?.point : null;
+  need(
+    call.args.length === 2 && mobId > 0 && point,
+    node,
+    "Unsupported transport spawn",
+  );
+  const mapId = state.maps.get(call.receiver.name);
+  return { kind: "spawn", mapId, mobId, ...point };
+}
+
+const MAP_CALLS = new Map([
+  ["killAllMonsters", clearCall],
+  ["broadcastMessage", musicCall],
+  ["spawnMonsterOnGroundBelow", spawnCall],
+]);
+
 function mapCall(state, call, node) {
   if (PRESENTATION.has(call.method)) {
     state.unsupported.add(PRESENTATION.get(call.method));
     return { kind: "ignored" };
+  }
+  if (MAP_CALLS.has(call.method)) {
+    return MAP_CALLS.get(call.method)(state, call, node);
   }
   need(
     call.method === "warpEveryone" && [1, 2].includes(call.args.length),
@@ -244,7 +417,61 @@ function callback(state, name) {
   const node = state.functions.get(name);
   need(node && !node.params.length, state.root, `${name}() is required`);
   need(node.body.body.length <= MAX_STATEMENTS, node, "Callback too long");
+  state.locals = new Map();
   return node.body.body.map((child) => statement(state, child));
+}
+
+function time(state, name) {
+  return { ms: state.times.get(name), scaled: state.scaled.has(name) };
+}
+
+/**
+ * Boats: takeoff's random branch schedules approach, whose random branch
+ * schedules invasion, which spawns monsters on ride maps that arrived's
+ * killAllMonsters clears. Returns the authored, unscaled invasion, or null.
+ */
+function invasion(state, bodies) {
+  const [branch, ...extra] = only(bodies.takeoff, "random-schedule");
+  if (!branch) return null;
+  need(!extra.length, state.root, "One random transport branch is supported");
+  const approach = state.functions.get(branch.name);
+  const inner = approach?.body.body[0];
+  need(
+    !approach?.params.length &&
+      approach.body.body.length === 1 &&
+      inner.type === "IfStatement",
+    state.root,
+    `${branch.name}() must be one random branch`,
+  );
+  const approachChance = randomChance(inner);
+  state.locals = new Map();
+  const steps = inner.consequent.body.map((child) => statement(state, child));
+  const [next, ...more] = only(steps, "schedule");
+  need(
+    next && !more.length && !only(steps, "random-schedule").length,
+    inner,
+    `${branch.name}() must schedule exactly one spawn callback`,
+  );
+  const body = callback(state, next.name);
+  const spawns = only(body, "spawn");
+  const rides = new Set(only(bodies.takeoff, "warp").map((warp) => warp.to));
+  const clears = new Set(only(bodies.arrived, "clear").map((row) => row.mapId));
+  need(
+    spawns.length &&
+      spawns.length <= MAX_SPAWNS &&
+      body.every((row) => row.kind === "ignored" || row.kind === "spawn") &&
+      spawns.every((row) => rides.has(row.mapId) && clears.has(row.mapId)),
+    state.root,
+    `${next.name}() must only spawn on ride maps cleared on arrival`,
+  );
+  return {
+    chance: branch.chance,
+    approachChance,
+    approachTime: time(state, branch.base),
+    approachJitter: time(state, branch.jitter),
+    spawnDelay: time(state, next.time),
+    spawns: spawns.map(({ mapId, mobId, x, y }) => ({ mapId, mobId, x, y })),
+  };
 }
 
 function only(list, kind) {
@@ -317,14 +544,10 @@ function cycle(state, bodies) {
     state.root,
     "Transport cycle must warp on takeoff and arrival",
   );
-  const time = (name) => ({
-    ms: state.times.get(name),
-    scaled: state.scaled.has(name),
-  });
   return {
-    closeTime: time(opening.stop.time),
-    beginTime: time(opening.takeoff.time),
-    rideTime: time(rides[0].time),
+    closeTime: time(state, opening.stop.time),
+    beginTime: time(state, opening.takeoff.time),
+    rideTime: time(state, rides[0].time),
     departures,
     arrivals,
   };
@@ -341,16 +564,28 @@ export function compileTransportSchedule({ text, path, sha256 }) {
       functions,
       maps: new Map(),
       scaled: new Set(),
+      locals: new Map(),
       unsupported: new Set(),
     };
     const bodies = {};
     for (const name of CALLBACKS) bodies[name] = callback(state, name);
     const schedule = cycle(state, bodies);
+    const raid = invasion(state, bodies);
+    // Only arrived's killAllMonsters has a consumer: it removes the invasion.
+    if (
+      CALLBACKS.some(
+        (name) =>
+          (name !== "arrived" || !raid) && only(bodies[name], "clear").length,
+      )
+    ) {
+      state.unsupported.add("field-monster-clearing");
+    }
     return {
       ...result,
       status: "supported",
       blockers: [],
       ...schedule,
+      ...(raid && { invasion: raid }),
       mapIds: [...new Set(state.maps.values())].sort((a, b) => a - b),
       unsupported: [...state.unsupported].sort(),
     };

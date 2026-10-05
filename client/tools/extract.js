@@ -514,6 +514,16 @@ async function extractMaps(character, combat) {
     portalPrograms: hash(
       Buffer.from(JSON.stringify(extractionContext.portalPrograms)),
     ),
+    // Ride maps package their transport invasion monster templates.
+    transportInvasions: hash(
+      Buffer.from(
+        JSON.stringify(
+          Object.values(extractionContext.transportSchedules ?? {}).map(
+            (schedule) => schedule.invasion ?? null,
+          ),
+        ),
+      ),
+    ),
   };
   let completed = 0;
   for (const id of mapIds) {

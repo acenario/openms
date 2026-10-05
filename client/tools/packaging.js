@@ -138,9 +138,10 @@ async function packageMobs(scene, state, atlasIds) {
   );
   for (const entity of scene.entities) {
     if (entity.kind !== "mob") continue;
-    const record = placements.get(entity.id);
-    if (!record) throw new Error("Mob artwork lacks authored placement");
-    if (renderables[record.template]) continue;
+    // An unplaced server spawn (transport invasion) names its template directly.
+    const key = placements.get(entity.id)?.template ?? entity.template;
+    if (!key) throw new Error("Mob artwork lacks authored placement");
+    if (renderables[key]) continue;
     const atlases = await packageAtlases(state, textureIds([entity]));
     for (const id of atlases) atlasIds.add(id);
     const bounds = entityBounds(entity, state.pixels);
@@ -148,7 +149,7 @@ async function packageMobs(scene, state, atlasIds) {
     bounds.right -= entity.x;
     bounds.top -= entity.y;
     bounds.bottom -= entity.y;
-    renderables[record.template] = { entity, atlases, bounds };
+    renderables[key] = { entity, atlases, bounds };
   }
   return renderables;
 }

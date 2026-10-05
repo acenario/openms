@@ -537,10 +537,47 @@ export async function extractLife(context, map, mapId) {
       }
     }
   }
+  await appendInvasionTemplates(context, mapId, {
+    cache,
+    templates,
+    entities,
+    planes,
+  });
   return {
     entities,
     life: lifeManifest(mapId, placements, templates, mapleTV),
   };
+}
+
+/**
+ * Published transport invasions (Boats Crimson Balrog) spawning on this map have
+ * no placement: package the template and artwork so the server can spawn them.
+ */
+async function appendInvasionTemplates(context, mapId, output) {
+  const { cache, templates, entities, planes } = output;
+  const spawns = Object.values(context.transportSchedules ?? {}).flatMap(
+    (schedule) =>
+      schedule.invasion?.spawns.filter(
+        (row) => String(row.mapId).padStart(9, "0") === mapId,
+      ) ?? [],
+  );
+  for (const row of spawns) {
+    const id = String(row.mobId).padStart(7, "0");
+    const key = `mob:${id}`;
+    if (templates[key]) continue;
+    if (!cache.has(key)) {
+      cache.set(key, await extractTemplate(context, "mob", id));
+    }
+    const template = cache.get(key);
+    templates[key] = template.metadata;
+    const record = {
+      id: `invasion:${id}`,
+      kind: "mob",
+      authored: { x: row.x, y: row.y, fh: 0, f: 1, hide: 0 },
+    };
+    // Packaging keys this placement-less artwork by template.
+    entities.push({ ...lifeEntity(record, template, planes), template: key });
+  }
 }
 
 async function appendTelevision(context, actor, info, output) {

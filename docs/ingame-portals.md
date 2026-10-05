@@ -135,7 +135,20 @@ Six vendored events share one canonical cycle and compile through the closed rea
 | Ride (`rideTime`) | 10 min | 2 min |
 | Cycle | 15 min | 3 min |
 
-`travelRate` lives in [policy.json](../infra/gameplay-definitions/policy.json) and applies only where `init()` calls `getTransportationTime`. Not implemented and listed in each record's `unsupported`: ship/enemy-ship presentation (`shipObj`, `setDocked`, `broadcastShip`), cabin/monster clearing and the Boats random Crimson Balrog invasion. Regression: `server/test/transport-schedule.test.js`. Live play also needs an extraction that packages the waiting/ride maps.
+`travelRate` lives in [policy.json](../infra/gameplay-definitions/policy.json) and applies only where `init()` calls `getTransportationTime`. Not implemented and listed in each record's `unsupported`: ship/enemy-ship presentation (`shipObj`, `setDocked`, `broadcastShip`, `broadcastEnemyShip`), the invasion `musicChange("Bgm04/ArabPirate")` broadcast (`music-change`) and cabin object clearing. Regression: `server/test/transport-schedule.test.js`. Live play also needs an extraction that packages the waiting/ride maps.
+
+#### Boats ship maps and the Crimson Balrog invasion
+
+Each Boats ship is a deck (the ride map `takeoff` warps onto) plus a cabin below it, joined by ordinary `Map.wz` portals. Both maps of a ship are arrival sources: `arrived` warps deck and cabin passengers to the same station portal.
+
+| Ship | Deck (ride map) | Cabin | Deck → cabin | Cabin → deck | Arrival |
+| --- | --- | --- | --- | --- | --- |
+| Ellinia → Orbis | 200090010 | 200090011 | `in00` → `st01`, `under00` → `st00` | `out00` → `in00`, `out01` → `under00` | 200000100 portal 0 |
+| Orbis → Ellinia | 200090000 | 200090001 | `in00` → `st01`, `under00` → `st00` | `out00` → `in00`, `out01` → `under00` | 101000300 portal 1 |
+
+The closed reader publishes the Boats invasion as the record's `invasion` (line numbers in `infra/gameplay-definitions/event/Boats.js`): `takeoff` rolls `Math.random() < 0.42` (63) and schedules `approach` after `invasionStartTime + trunc(random × invasionDelayTime)` (64; 3 min + up to 1 min, both scaled at 21–22); `approach`'s branch `floor(random × 10) < 10` always passes (85) and schedules `invasion` after the unscaled `invasionDelay` 5 s (15, 93); `invasion` spawns Crimson Balrog 8150000 twice with `spawnMonsterOnGroundBelow` at deck (−538, 143) on 200090000 and twice at (339, 148) on 200090010 (101–108); `arrived` clears both decks with `killAllMonsters` (78–79). At the default `travelRate` 5 the spawn lands 41–53 s after takeoff of a 120 s ride. The reader requires every spawn map to be a ride map that `arrived` clears; `killAllMonsters` elsewhere stays `field-monster-clearing`.
+
+`server/src/transport-schedule.js` rolls each departure from `sha256(source sha256, takeoff timestamp)` (OpenMS policy; Cosmic draws `Math.random` live), so a restart never re-rolls a ride. While the invaded ride is between spawn time and arrival, every loaded deck field holds the authored monsters, placed on the nearest floor at or below the point; a deck loaded mid-ride gets the same invasion. Killed Balrogs give ordinary rewards and do not respawn; arrival removes the rest without rewards. Cabins are never spawn maps, so cabin passengers are safe and still arrive. A missing template or floor fails closed and logs `transport.invasion.unavailable`. Crimson Balrog's `attack1` (type-2 magic projectile) has no OpenMS controller and is skipped like on any field mob; `attack2` (type-0 area) runs. Extraction packages the invasion template and artwork on each deck map without a placement (`life-data.js`, keyed by template in `packaging.js`), so a fresh extraction is required before the decks carry the template.
 
 ### Authored NPC travel and World Tour
 

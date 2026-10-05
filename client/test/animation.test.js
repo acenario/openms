@@ -311,6 +311,35 @@ test("life extraction preserves rendered death alpha and resets it for another a
   }
 });
 
+test("a ride map packages its transport invasion template without a placement", async () => {
+  const root = {
+    type: "Property",
+    children: {
+      info: lifeProperties({ maxHP: 1 }),
+      stand: { type: "Property", children: { 0: lifeCanvas(180) } },
+    },
+  };
+  const context = {
+    image: (archive) => (archive === "Mob" ? root : lifeProperties({})),
+    part: async () => ({ texture: "pixel", x: 0, y: 0, z: 0 }),
+    transportSchedules: {
+      Boats: {
+        invasion: {
+          spawns: [{ mapId: 200090010, mobId: 8150000, x: 339, y: 148 }],
+        },
+      },
+    },
+  };
+  const ride = await extractLife(context, { children: {} }, "200090010");
+  expect(ride.life.placements).toEqual([]);
+  expect(Object.keys(ride.life.templates)).toEqual(["mob:8150000"]);
+  expect(ride.entities.map((row) => [row.kind, row.template])).toEqual([
+    ["mob", "mob:8150000"],
+  ]);
+  const cabin = await extractLife(context, { children: {} }, "200090011");
+  expect(cabin.life.templates).toEqual({});
+});
+
 function extractAnimation(node) {
   return originalFrames(
     node,
