@@ -37,6 +37,7 @@ import {
   releaseSkillTravel,
 } from "./field-skills.js";
 import { releaseInteractions } from "./interactions.js";
+import { prepareMotionDiverts } from "./field-diverts.js";
 import {
   bindActorWorldActions,
   clearActorSeat,
@@ -372,6 +373,7 @@ function bindTransition(world, actor, transition) {
     actor.field = target;
     actor.simulation = simulation;
     target.characters.set(actor.id, actor);
+    prepareMotionDiverts(actor, target);
     actor.lastInputTick = target.tick;
     bindSkillTravel(actor, transition.skillCandidate);
     bindActorWorldActions(actor, transition.worldActions);
