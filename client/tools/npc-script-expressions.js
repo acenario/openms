@@ -55,6 +55,9 @@ const READS = Object.freeze({
   canHoldAll: ["can-hold-all", 1, 2, "itemIds"],
   canSpawnPlayerNpc: ["can-spawn-player-npc", 1, 1],
 });
+// Server job enum constant names (Cosmic client/Job.java interface evidence).
+// ponytail: only the name an imported script compares; add others when one does.
+const JOB_ENUM_IDS = Object.freeze({ BEGINNER: 0 });
 
 function expressionChildren(node) {
   switch (node.type) {
@@ -238,6 +241,7 @@ function binaryExpression(context, node, refs) {
     return { op: "unary", operator: "is-array", value: refs[0] };
   }
   if (!BINARY.has(node.operator)) return null;
+  jobNameComparison(context, node, refs);
   if (node.operator === "+") {
     context.concatenations.push({ left: refs[0], right: refs[1], node });
   }
@@ -247,6 +251,30 @@ function binaryExpression(context, node, refs) {
     left: refs[0],
     right: refs[1],
   };
+}
+
+/** Rhino's loose `getJob() == "NAME"` compares the server job enum by constant
+ *  name; replace the string operand with that constant's numeric job ID. */
+function jobNameComparison(context, node, refs) {
+  if (!["==", "!="].includes(node.operator)) return;
+  const records = refs.map((ref) => context.expressions[ref]);
+  const side = records.findIndex(
+    (record) => record?.op === "literal" && typeof record.value === "string",
+  );
+  const other = records[1 - side];
+  if (side < 0 || other?.op !== "read" || other.kind !== "job") return;
+  const name = records[side].value;
+  if (!Object.hasOwn(JOB_ENUM_IDS, name)) {
+    blockScript(context, node, `Unsupported job enum name: ${name}`);
+    return;
+  }
+  refs[side] = context.expressions.length;
+  context.expressions.push({
+    op: "literal",
+    value: JOB_ENUM_IDS[name],
+    raw: String(JOB_ENUM_IDS[name]),
+    source: sourceSpan(side ? node.right : node.left),
+  });
 }
 
 function valueExpression(node, refs) {
