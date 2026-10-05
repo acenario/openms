@@ -645,17 +645,30 @@ function skillClockBlocked(actor) {
   );
 }
 
+/**
+ * A held clock still owes its buff/cooldown time: published expiries are `world.now + remaining`,
+ * so skipping held ticks would push them later and outlast the wall-clock duration.
+ */
+function holdSkillClock(actor, ms) {
+  if (actor.skills) actor.skillClockHeldMs = (actor.skillClockHeldMs ?? 0) + ms;
+}
+
 export function advanceActorSkills(world, actor, ms = 30) {
-  if (skillClockBlocked(actor)) return;
+  if (skillClockBlocked(actor)) return holdSkillClock(actor, ms);
   if (actor.skillRelease) {
     const release = actor.skillRelease;
     actor.skillRelease = null;
     releaseSkill(world, actor, release);
-    if (actor.skillTask) return;
+    if (actor.skillTask) return holdSkillClock(actor, ms);
   }
   actor.skills.utilityController.input(actor.input);
   const hp = actor.profile.hp;
   actor.skills.step(ms);
+  const held = actor.skillClockHeldMs ?? 0;
+  if (held > 0) {
+    actor.skillClockHeldMs = 0;
+    actor.skills.advanceTimers(held);
+  }
   syncActorEffects(actor, world);
   if (hp > 0 && actor.profile.hp === 0 && !actor.skillField.dead) {
     death(world, actor);

@@ -347,7 +347,12 @@ function hydrateRuntimeSource(actor, world, row) {
       : (actor.profile.skills[row.templateId]?.expiresAt ?? null);
   source.itemValues = row.kind === "item" ? row.spec : null;
   effects.start(source);
-  source.remaining = row.expiresAt - world.now;
+  source.remaining = hydratedRemaining(actor, row, world.now);
+}
+
+/** Held skill-clock time is debited from every source on release; a hydrated row already counts it. */
+function hydratedRemaining(actor, row, now) {
+  return row.expiresAt - now + (actor.skillClockHeldMs ?? 0);
 }
 
 /** Serialize active source changes, preserving the native controller/source identity. */

@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { content, fixture } from "./party-fixture.js";
 import { combatOperation } from "../src/combat-rewards.js";
 import {
+  advanceActorSkills,
   castSkill,
   synchronizeActorSkills,
   disposeActorSkills,
@@ -116,4 +117,23 @@ test("no resources or recipients change when a recipient cannot accept the trans
   expect(
     partySkillTargets(probe.world, caster, skill, skill.levels[20]),
   ).toEqual([caster]);
+});
+
+test("a buff's published expiry stays fixed while a transaction holds the skill clock", async () => {
+  const probe = await fixture(200, [2001002]);
+  const caster = probe.actors[0];
+  await cast(probe, 2001002);
+  const row = caster.profile.onlineState.effects.find(
+    (effect) => effect.templateId === 2001002,
+  );
+  const expiresAt = row.expiresAt;
+  for (let tick = 0; tick < 100; tick++) {
+    probe.world.now += 30;
+    caster.pending = tick % 2 === 0 ? {} : null;
+    advanceActorSkills(probe.world, caster);
+  }
+  caster.pending = null;
+  probe.world.now += 30;
+  advanceActorSkills(probe.world, caster);
+  expect(row.expiresAt).toBe(expiresAt);
 });
