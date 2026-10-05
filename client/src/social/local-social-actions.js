@@ -1,5 +1,7 @@
 import {
+  canFormParty,
   DEFAULT_FRIEND_GROUP,
+  PARTY_FORMATION_REFUSAL,
   SOCIAL_LIMITS,
   validateSearch,
 } from "../profile/profile-social.js";
@@ -214,9 +216,14 @@ function unblock(context) {
 function partyCreate(context) {
   const self = context.get();
   socialRequire(
-    !self.social.party && self.level >= 10,
+    !self.social.party,
     "party-requirements",
-    "Party creation requires level10 and no current party.",
+    "Already have joined a party.",
+  );
+  socialRequire(
+    canFormParty(self),
+    "party-requirements",
+    PARTY_FORMATION_REFUSAL,
   );
   self.social.party = {
     id: context.uid(),
@@ -231,9 +238,9 @@ function partyInvite(context) {
   const party = context.group("party"),
     target = context.target();
   socialRequire(
-    !target.social.party && target.level >= 10,
+    !target.social.party && canFormParty(target),
     "party-requirements",
-    "The invited character must be level10 and not already in a party.",
+    "The invited character is already in a party or is a Beginner, Noblesse or Legend below Lv. 10.",
   );
   socialRequire(
     party.members.length < SOCIAL_LIMITS.party,
@@ -251,9 +258,14 @@ export function acceptParty(context, request) {
   const self = context.get(),
     party = context.get(request.fromId).social.party;
   socialRequire(
-    party?.id === request.groupId && !self.social.party && self.level >= 10,
+    party?.id === request.groupId && !self.social.party,
     "party-requirements",
     "The party invitation is no longer applicable.",
+  );
+  socialRequire(
+    canFormParty(self),
+    "party-requirements",
+    PARTY_FORMATION_REFUSAL,
   );
   socialRequire(
     party.members.length < SOCIAL_LIMITS.party,
@@ -430,9 +442,14 @@ function searchWrite(context) {
     "Enable Party Search in Game Options before registering.",
   );
   socialRequire(
-    self.level >= 10 && (!party || party.leaderId === context.actorId),
+    !party || party.leaderId === context.actorId,
     "search-requirements",
-    "Only an ungrouped level10 character or party leader can register.",
+    "Only an ungrouped character or party leader can register.",
+  );
+  socialRequire(
+    canFormParty(self),
+    "search-requirements",
+    PARTY_FORMATION_REFUSAL,
   );
   const search = searchListing(context.payload, self.social.search);
   search.partyId = party?.id ?? null;

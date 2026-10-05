@@ -30,6 +30,13 @@ export const SOCIAL_LIMITS = Object.freeze({
   allianceNotice: 20,
   guildCapacity: 10,
 });
+/** Native 0052fce1/0052fecf refuse jobs 0/1000/2000/2001 below level10 with string 0x14c1;
+ * other jobs (a level8 Magician) may form parties. See docs/offline-binding-actions.md. */
+export const PARTY_FORMATION_REFUSAL =
+  "Characters whose level is below Lv. 10, such as Beginners, Noblesses, and Legends cannot form a party.";
+export function canFormParty({ job, level }) {
+  return level >= 10 || ![0, 1000, 2000, 2001].includes(job);
+}
 export const SOCIAL_KINDS = Object.freeze([
   "friend",
   "party",
@@ -388,7 +395,7 @@ export function validateSearch(value) {
     ["minLevel", "maxLevel", "jobs", "text", "partyId", "paused"],
     "party search",
   );
-  // Search criteria cover character levels; level10 is the registering actor's admission gate.
+  // Search criteria cover character levels; canFormParty gates the registering actor.
   domainInteger(value.minLevel, 1, 200, "search minimum level");
   domainInteger(value.maxLevel, value.minLevel, 200, "search maximum level");
   domainArray(value.jobs, 64, "search jobs");
