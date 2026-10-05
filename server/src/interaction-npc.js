@@ -113,13 +113,34 @@ async function openNpc(actor, message, world) {
   actor.conversation = lease;
   actor.shop = null;
   lease.route = route;
-  if (offers.length) {
-    lease.menu = offers;
-    lease.step++;
-    publishNpcMenu(actor, world, lease);
-    return interactionReceipt(actor.revision);
+  if (offers.length) lease.menu = offers;
+  return openLease(actor, message, world, lease);
+}
+
+/**
+ * Every opening view (menu, shop, storage, script) runs under the acquired
+ * lease; a refused or failed opening releases it rather than leaving the
+ * character's portals and NPCs blocked until the lease expires.
+ */
+async function openLease(actor, message, world, lease) {
+  try {
+    if (lease.menu?.length) {
+      lease.step++;
+      publishNpcMenu(actor, world, lease);
+      return interactionReceipt(actor.revision);
+    }
+    const receipt = await runRoute(actor, message, world, lease);
+    if (receipt.status !== "committed") releaseLease(actor, world, lease);
+    return receipt;
+  } catch (error) {
+    releaseLease(actor, world, lease);
+    throw error;
   }
-  return runRoute(actor, message, world, lease);
+}
+
+/** A newer conversation acquired during an awaited opening stays untouched. */
+function releaseLease(actor, world, lease) {
+  if (actor.conversation === lease) closeConversation(actor, world);
 }
 
 /** Only the authenticated original tutorial portal may acquire this virtual conversation. */
@@ -164,13 +185,8 @@ export async function openPortalNpc(actor, portal, world) {
     fieldEpoch: field.epoch,
     action: { kind: "npc.open", npcId: lease.npcId },
   };
-  try {
-    const receipt = await runRoute(actor, message, world, lease);
-    requireInteraction(receipt.status === "committed", receipt.code);
-  } catch (error) {
-    closeConversation(actor, world);
-    throw error;
-  }
+  const receipt = await openLease(actor, message, world, lease);
+  requireInteraction(receipt.status === "committed", receipt.code);
 }
 
 async function runRoute(actor, message, world, lease) {

@@ -3,6 +3,7 @@ import { loadContent } from "../src/content.js";
 import { createProfile } from "../../client/src/profile/profile-validation.js";
 import { freshLease } from "../src/interaction-common.js";
 import { executeNpc } from "../src/interaction-npc.js";
+import { openStorage } from "../src/interaction-storage.js";
 import { questOffers, executeQuest } from "../src/interaction-quest.js";
 import { startQuestDialogue } from "../src/interaction-quest-dialogue.js";
 import { createDevelopmentLog } from "../../shared/development-log.js";
@@ -262,4 +263,43 @@ test("known blocked NPC services show a closable availability notice without mut
   await answer(probe, { kind: "next" });
   expect(probe.actor.conversation).toBeNull();
   expect(probe.actor.profile).toEqual(before);
+});
+
+function storageProbe(level) {
+  const probe = fixture(null, 1012009); // Mr. Lee, Henesys Park storage.
+  probe.actor.profile.level = level;
+  probe.world.openStorage = (actor, lease) =>
+    openStorage(actor, probe.world, lease);
+  probe.world.participants = {
+    storage: async () => ({ slots: 4, mesos: 0, items: [] }),
+  };
+  return probe;
+}
+
+test("a refused storage opening releases its conversation lease", async () => {
+  const probe = storageProbe(10);
+  await expect(open(probe)).rejects.toMatchObject({
+    code: "REQUIREMENTS_NOT_MET",
+  });
+  expect(probe.actor.conversation).toBeNull();
+  expect(probe.actor.storage).toBeNull();
+});
+
+test("a level-15 character still opens Mr. Lee's storage", async () => {
+  const probe = storageProbe(15);
+  expect((await open(probe)).status).toBe("committed");
+  expect(probe.actor.conversation.view.kind).toBe("storage");
+  expect(latest(probe)).toMatchObject({ kind: "storage", npcId: 1012009 });
+});
+
+test("a failed shop opening releases its conversation lease", async () => {
+  const probe = fixture(null, 1011000); // Standard shop fallback route.
+  const publish = probe.world.publish;
+  probe.world.publish = (recipient, message) => {
+    if (message.event?.kind === "shop") throw new Error("delivery failed");
+    publish(recipient, message);
+  };
+  await expect(open(probe)).rejects.toThrow("delivery failed");
+  expect(probe.actor.conversation).toBeNull();
+  expect(probe.actor.shop).toBeNull();
 });
