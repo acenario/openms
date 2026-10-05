@@ -17,7 +17,7 @@ The source files are data for the bounded compiler, never directly evaluated as 
 
 ## Local policy
 
-[policy.json](policy.json) contains only the eight settings consumed by conversion, extracted from the supplied Cosmic configuration. No Java files, Java file hashes, full `config.yaml`, credentials or deployment settings are needed. The converter validates schema version 1 and hashes this small policy file for generated provenance.
+[policy.json](policy.json) contains only the nine settings consumed by conversion, extracted from the supplied Cosmic configuration (`USE_PARTY_EXP_BONUS` is an OpenMS switch with no Cosmic key). No Java files, Java file hashes, full `config.yaml`, credentials or deployment settings are needed. The converter validates schema version 1 and hashes this small policy file for generated provenance.
 
 | Setting | Imported value | Consumer |
 | --- | --- | --- |
@@ -29,6 +29,7 @@ The source files are data for the bounded compiler, never directly evaluated as 
 | `staticConfig.USE_STARTING_AP_4` | `false` | NPC static branch compilation |
 | `staticConfig.USE_ENFORCE_JOB_SP_RANGE` | `false` | NPC static branch compilation |
 | `staticConfig.USE_PARTY_FOR_STARTERS` | `false` | Published as `catalog.serverData.policy` for the server and browser party rule (`canFormParty`). `true` lets Beginners/Noblesses/Legends below level 10 form parties; see the [party formation gate](../../docs/offline-binding-actions.md) |
+| `staticConfig.USE_PARTY_EXP_BONUS` | `true` | OpenMS switch, published as `catalog.serverData.policy` for server kill credit (`planKillCredit`). `true` applies the Cosmic GMSv83 level-weighted party split and per-member party bonus; `false` restores the OpenMS equal split; see [EXP and loot](../../docs/server/remaining-work.md#openms-policies-and-original-evidence) |
 
 Enhanced crafting must remain `false` until its effects are implemented. Equipment random stats remain an explicit unsupported policy (`false`) in the converter. Unknown fields, missing settings and nonboolean settings fail validation rather than selecting implicit defaults.
 

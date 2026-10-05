@@ -55,7 +55,11 @@ test("conversion needs only local policy and scripts alongside SQL", async () =>
     expect(policy.enhancedCrafting).toBe(false);
     expect(policy.equipmentRandomStats).toBe(false);
     // Cosmic USE_PARTY_FOR_STARTERS defaults off: the original client party rule applies.
-    expect(result.policy).toEqual({ USE_PARTY_FOR_STARTERS: false });
+    // USE_PARTY_EXP_BONUS defaults on: the Cosmic GMSv83 party EXP split and bonus.
+    expect(result.policy).toEqual({
+      USE_PARTY_FOR_STARTERS: false,
+      USE_PARTY_EXP_BONUS: true,
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -79,6 +83,10 @@ test("local gameplay policy rejects missing, unsupported and oversized settings"
     {
       ...policy,
       staticConfig: { ...policy.staticConfig, USE_PARTY_FOR_STARTERS: 1 },
+    },
+    {
+      ...policy,
+      staticConfig: { ...policy.staticConfig, USE_PARTY_EXP_BONUS: "true" },
     },
   ];
   try {
