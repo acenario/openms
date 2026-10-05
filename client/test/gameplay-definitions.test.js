@@ -69,6 +69,8 @@ test("local gameplay policy rejects missing, unsupported and oversized settings"
     { ...policy, schemaVersion: 2 },
     { ...policy, enhancedCrafting: true },
     { ...policy, extra: false },
+    { ...policy, travelRate: 0 },
+    { ...policy, travelRate: 1.5 },
     { ...policy, staticConfig: {} },
     { ...policy, staticConfig: { ...policy.staticConfig, USE_CPQ: "true" } },
     { ...policy, staticConfig: { ...policy.staticConfig, UNKNOWN: false } },

@@ -122,6 +122,21 @@ Concrete entrances: Ellinia `101000000/26 jobin00` (`enterMagiclibrar`) warps ad
 
 Of the 458 vendored portal sources, 4 are exact tutorial programs and 31 market translations; of the other 423, 276 compile (173 contain a reachable-in-principle warp, 103 only trap or end) and 147 stay blocked. Top blockers: `pi.updateAreaInfo` (26, Aran/Evan tutorials), unsupported `pi.getPlayer()` members (24), non-literal warp maps (15, e.g. `rankRoom`), `pi.warpParty` (12), `pi.getClient` (8). In the 735-map catalog at the time of writing, 47 of 69 sentinel scripted portals compile and 35 can warp.
 
+### Online transport schedules
+
+Six vendored events share one canonical cycle and compile through the closed reader `client/tools/transport-schedule-compiler.js` (Boats, Trains, Subway, Cabin, Genie, AirPlane; Elevator, KerningTrain, Hak and every instance event stay blocked). It reads, never evaluates: literal times, `getMap(N)` bindings, `em.getTransportationTime`, `scheduleNew` (docked + entry open, schedules stop and takeoff), the stop callback (entry closed), `takeoff` (waiting room → ride `warpEveryone`, random spawn point) and `arrived` (ride → station portal). Supported records are published as `shops.transportSchedules` and their stops extend the map closure.
+
+`server/src/transport-schedule.js` evaluates the cycle as a pure function of wall-clock time anchored at the Unix epoch (OpenMS policy; Cosmic anchors at channel start), so restarts keep one timetable and no timer state is persisted. Moves are level-triggered: a waiting room while undocked is `takeoff` plus that room's `onUserEnter` `warpAhead`; a ride map while docked is `arrived`. Each move is an ordinary server-produced transition (`transport.travel`) retried after refusal. Ticket NPCs admit `cm.getEventManager("<published transport>")` and its `getProperty`; the property snapshot is refreshed when the turn commits, so a departure in between refuses the boarding warp. Any other event manager name keeps the `event-instance` trap.
+
+| Boats.js (Ellinia ↔ Orbis) | Authored (`travelRate` 1) | Default `travelRate` 5 |
+| --- | ---: | ---: |
+| Entry closes (`closeTime`) | 4 min | 48 s |
+| Takeoff (`beginTime`) | 5 min | 60 s |
+| Ride (`rideTime`) | 10 min | 2 min |
+| Cycle | 15 min | 3 min |
+
+`travelRate` lives in [policy.json](../infra/gameplay-definitions/policy.json) and applies only where `init()` calls `getTransportationTime`. Not implemented and listed in each record's `unsupported`: ship/enemy-ship presentation (`shipObj`, `setDocked`, `broadcastShip`), cabin/monster clearing and the Boats random Crimson Balrog invasion. Regression: `server/test/transport-schedule.test.js`. Live play also needs an extraction that packages the waiting/ride maps.
+
 ### Authored NPC travel and World Tour
 
 NPC travel is a separate compiled callback path, not permission to execute raw portal scripts. `npc-script-compiler.js` admits `cm.getPlayer().saveLocation(type)` only for one literal key from the shared [schema8 saved-location inventory](offline-profile.md#schema-8). `npc-script-authority.js` stores the actual current numeric map; `peekSavedLocation` leaves a present slot intact and `getSavedLocation` consumes it. Both return−1 for an absent slot, leaving any fallback to the authored script. No portal object is persisted.

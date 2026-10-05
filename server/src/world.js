@@ -55,6 +55,7 @@ import {
 } from "./field-skills.js";
 import { sweepInteractions, releaseInteractions } from "./interactions.js";
 import { advanceMarketSchedule } from "./market-schedule.js";
+import { advanceTransports } from "./transport-schedule.js";
 import { updatePlayerMovement } from "../../client/src/physics/skill-movement.js";
 import { projectCharacterStats } from "../../client/src/character/character-stats.js";
 import { Participants } from "./participants.js";
@@ -514,6 +515,7 @@ export class OnlineWorld {
     this.now = Date.now();
     sweepInteractions(this);
     advanceMarketSchedule(this);
+    advanceTransports(this);
     if (this.lastNow === null) {
       this.lastNow = now;
       return;

@@ -69,6 +69,8 @@ async function routes(state, options) {
     state.report.gameplayContent = converted.report;
     state.context.portalPrograms = converted.report.scripts.portalPrograms;
     state.context.portalScripts = converted.datasets.shops.portalScripts;
+    state.context.transportSchedules =
+      converted.datasets.shops.transportSchedules;
     state.context.npcRoutes = new Map(
       converted.datasets.shops.npcRoutes
         .filter((route) => route.status === "supported")

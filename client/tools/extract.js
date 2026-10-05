@@ -688,7 +688,8 @@ async function run() {
     gameplayDefinitions,
   );
   extractionContext.portalPrograms = converted.report.scripts.portalPrograms;
-  extractionContext.portalScripts = converted.datasets.shops.portalScripts;
+  const { portalScripts, transportSchedules } = converted.datasets.shops;
+  Object.assign(extractionContext, { portalScripts, transportSchedules });
   progress("Selecting original map and supported-NPC route closure");
   const routes = selectMapClosure(converted.datasets.shops.npcRoutes);
   progress(`Selected ${mapIds.length} maps; converting shared avatar artwork`);

@@ -762,6 +762,7 @@ export function compileNpcScript(input) {
   context.defaultTalk = input.defaultTalk;
   context.staticConfig = input.staticConfig;
   context.originalQuestIds = input.originalQuestIds;
+  context.eventManagers = input.eventManagers;
   context.portal = input.portal === true;
   let program = null;
   try {

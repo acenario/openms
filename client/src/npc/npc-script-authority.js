@@ -509,9 +509,25 @@ export function readNpcLocal(turn, kind, args) {
     case "saved-location-peek":
     case "saved-location-take":
       return readSavedLocation(turn, kind, args[0]);
+    case "event-manager":
+    case "event-property":
+      return readEventManager(turn, kind, args);
     default:
       return readNpcPure(turn, kind, args);
   }
+}
+
+/** Server-published EventManager properties; an absent manager is Cosmic's null. */
+function readEventManager(turn, kind, args) {
+  const events = turn.environment.events ?? {};
+  const known = typeof args[0] === "string" && Object.hasOwn(events, args[0]);
+  if (kind === "event-manager") return known ? args[0] : null;
+  requireNpc(
+    known && Object.hasOwn(events[args[0]], args[1]),
+    "Event manager property is unavailable",
+    "npc-dependency",
+  );
+  return events[args[0]][args[1]];
 }
 
 function readNpcPure(turn, kind, args) {

@@ -403,11 +403,14 @@ export function compileExpression(context, scope, root) {
 
 function serviceRecord(service, refs) {
   if (!service) return null;
-  return service.op === "read" ? { ...service, args: refs } : service;
+  const record = { ...service };
+  delete record.operands;
+  return record.op === "read" ? { ...record, args: refs } : record;
 }
 
 function serviceOperands(service, node) {
-  return service && service.op !== "read" ? [] : expressionChildren(node);
+  if (service && service.op !== "read") return [];
+  return service?.operands ?? expressionChildren(node);
 }
 
 function dependencyIndex(context, expression) {

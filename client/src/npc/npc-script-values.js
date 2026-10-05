@@ -89,6 +89,8 @@ export const NPC_READ_TYPES = Object.freeze({
   "input-text": [0, 0],
   "crafting-scroll": [0, 0],
   "map-id": [0, 0],
+  "event-manager": [1, 1],
+  "event-property": [2, 2],
   "number-with-commas": [1, 1],
   "parse-int": [1, 2],
   "hall-of-fame-map": [1, 1],

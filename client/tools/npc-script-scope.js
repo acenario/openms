@@ -1,4 +1,7 @@
-import { npcRemoteService } from "./npc-script-services.js";
+import {
+  admittedEventManager,
+  npcRemoteService,
+} from "./npc-script-services.js";
 import {
   NPC_SCRIPT_LIMITS,
   astInventory,
@@ -83,7 +86,10 @@ function declare(context, scope, declaration, kind) {
     host: shopFactoryImport(declaration.init)
       ? "shop-factory"
       : javaImport(declaration.init),
-    remoteService: npcRemoteService(declaration.init, context.portal),
+    eventManager: admittedEventManager(context, declaration.init),
+    remoteService: admittedEventManager(context, declaration.init)
+      ? null
+      : npcRemoteService(declaration.init, context.portal),
     declarationEnd: declaration.end ?? node.end,
   };
   table.set(node.name, variable);

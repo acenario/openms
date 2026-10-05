@@ -8,7 +8,7 @@ This directory owns the gameplay script inputs for content compilation. It conta
 | `portal/` | 458 | Four hash-verified tutorial programs; other scripts inventoried |
 | `quest/` | 253 | Inventory |
 | `reactor/` | 292 | Inventory |
-| `event/` | 108 | Inventory |
+| `event/` | 108 | Six canonical transport cycles compiled (Boats, Trains, Subway, Cabin, Genie, AirPlane); others inventory |
 | `map/` | 90 | Inventory |
 | `item/` | 2 | Inventory |
 | Root scripts | 4 | Inventory |
@@ -17,11 +17,12 @@ The source files are data for the bounded compiler, never directly evaluated as 
 
 ## Local policy
 
-[policy.json](policy.json) contains only the six settings consumed by conversion, extracted from the supplied Cosmic configuration. No Java files, Java file hashes, full `config.yaml`, credentials or deployment settings are needed. The converter validates schema version 1 and hashes this small policy file for generated provenance.
+[policy.json](policy.json) contains only the seven settings consumed by conversion, extracted from the supplied Cosmic configuration. No Java files, Java file hashes, full `config.yaml`, credentials or deployment settings are needed. The converter validates schema version 1 and hashes this small policy file for generated provenance.
 
 | Setting | Imported value | Consumer |
 | --- | --- | --- |
 | `enhancedCrafting` | `false` | Crafting policy, from `USE_ENHANCED_CRAFTING` |
+| `travelRate` | `5` | Transport schedules: `em.getTransportationTime(t)` = `ceil(t / travelRate)` (Cosmic world `travel_rate`). OpenMS choice; `1` restores the authored v83 cadence |
 | `staticConfig.USE_CPQ` | `true` | NPC static branch compilation |
 | `staticConfig.USE_ENABLE_SOLO_EXPEDITIONS` | `false` | NPC static branch compilation |
 | `staticConfig.USE_AUTOASSIGN_STARTERS_AP` | `true` | NPC static branch compilation |

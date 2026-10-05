@@ -138,6 +138,19 @@ export function admitNpcDestinations(context, source, closure) {
     admitNpcRoute(context, source, route, closure);
   }
   admitPortalNpcDestinations(context, source, closure);
+  admitTransportDestinations(context, source, closure);
+}
+
+/** A published transport's waiting room reaches its ride map, and the ride its station. */
+function admitTransportDestinations(context, source, closure) {
+  for (const [event, schedule] of Object.entries(
+    context.transportSchedules ?? {},
+  )) {
+    for (const warp of [...schedule.departures, ...schedule.arrivals]) {
+      if (String(warp.from).padStart(9, "0") !== source) continue;
+      admitDestinationMaps(context, { source, event }, [warp.to], closure);
+    }
+  }
 }
 
 /** A supported online portal script contributes its finite literal warp maps. */

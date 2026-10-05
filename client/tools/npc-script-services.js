@@ -246,10 +246,47 @@ export function npcBooleanConfig(context, name) {
   return value;
 }
 
+/** `cm.getEventManager("<published transport>")`; any other name keeps its trap. */
+export function admittedEventManager(context, node) {
+  const name = node?.arguments?.[0];
+  return cmMethod(node) === "getEventManager" &&
+    node.arguments.length === 1 &&
+    name.type === "Literal" &&
+    typeof name.value === "string" &&
+    context.eventManagers?.has(name.value)
+    ? name.value
+    : null;
+}
+
+/** EventManager reads: the manager (null when unpublished) and its getProperty. */
+function eventRead(context, scope, node) {
+  if (admittedEventManager(context, node)) {
+    return { op: "read", kind: "event-manager", args: [] };
+  }
+  const receiver = node.callee?.object;
+  if (
+    call(node, "getProperty") &&
+    node.arguments.length === 1 &&
+    receiver.type === "Identifier" &&
+    context.variables.some((variable) => variable.name === receiver.name) &&
+    resolveVariable(context, scope, receiver)?.eventManager
+  ) {
+    return {
+      op: "read",
+      kind: "event-property",
+      args: [],
+      operands: [receiver, node.arguments[0]],
+    };
+  }
+  return null;
+}
+
 export function npcServiceExpression(context, scope, node) {
   if (node.type === "MemberExpression" && !node.computed) {
     return configField(context, scope, node);
   }
+  const event = eventRead(context, scope, node);
+  if (event) return event;
   const host = staticHostExpression(context, scope, node);
   if (host) return host;
   const service =

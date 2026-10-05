@@ -10,6 +10,7 @@ import { compileNpcScript } from "./npc-script-compiler.js";
 import { compileNpcRoutes } from "./npc-script-routes.js";
 import { compileTutorialPortal } from "./portal-data.js";
 import { compilePortalScript } from "./portal-script-compiler.js";
+import { compileTransportSchedule } from "./transport-schedule-compiler.js";
 import { TUTORIAL_PORTAL_PROGRAMS } from "../src/npc/npc-script-portals.js";
 import {
   sourcePaths as configuredSources,
@@ -217,6 +218,7 @@ function compileScript(state, category, path, { record, file }) {
       defaultTalk: scriptDefaultTalk(record.source, options.defaultTalkForNpc),
       staticConfig,
       originalQuestIds: options.originalQuestIds,
+      eventManagers: new Set(Object.keys(state.transportSchedules)),
     });
     state.compilations.push(compilation);
     record.sourceText = file.text;
@@ -227,20 +229,35 @@ function compileScript(state, category, path, { record, file }) {
       originalQuestIds: options.originalQuestIds,
     });
     if (summary) record.compilation = summary;
+  } else if (category === "event") {
+    const compilation = compileTransportSchedule({
+      ...file,
+      path: record.source,
+    });
+    // Only the closed transport cycle runs; other events stay inventories.
+    if (compilation.status === "supported") {
+      state.transportSchedules[path.slice("event/".length, -3)] = {
+        ...compilation,
+        travelRate: state.travelRate,
+      };
+    }
   } else if (category === "reactor") {
     state.reactorPrograms[path.slice("reactor/".length, -3)] =
       compileReactorReward({ ...file, source: record.source });
   }
 }
 
-async function scriptInventory(root, options, staticConfig) {
+async function scriptInventory(root, options, policy) {
   options.progress?.("Gameplay content: scanning local scripts");
+  // Sorted paths compile event/ before npc/: NPC sources admit only published transports.
   const paths = await sourcePaths(root, "", ".js");
   const files = [],
     categories = Object.create(null);
   const state = {
     options,
-    staticConfig,
+    staticConfig: policy.staticConfig,
+    travelRate: policy.travelRate,
+    transportSchedules: Object.create(null),
     compilations: [],
     portalPrograms: Object.create(null),
     portalScripts: Object.create(null),
@@ -274,6 +291,7 @@ async function scriptInventory(root, options, staticConfig) {
     portalPrograms: state.portalPrograms,
     portalScripts: state.portalScripts,
     reactorPrograms: state.reactorPrograms,
+    transportSchedules: state.transportSchedules,
   };
 }
 
@@ -415,7 +433,7 @@ export async function npcRuntimePolicy(root) {
     !value ||
     value.schemaVersion !== 1 ||
     value.enhancedCrafting !== false ||
-    Object.keys(value).length !== 3 ||
+    Object.keys(value).length !== 4 ||
     !value.staticConfig ||
     Array.isArray(value.staticConfig)
   ) {
@@ -431,12 +449,21 @@ export async function npcRuntimePolicy(root) {
       "Gameplay policy must contain exactly the supported boolean settings",
     );
   }
+  // Cosmic WorldConfig.travel_rate: transport rides/departures take 1/N of the authored time.
+  if (
+    !Number.isSafeInteger(value.travelRate) ||
+    value.travelRate < 1 ||
+    value.travelRate > 60
+  ) {
+    throw new Error("Gameplay policy travelRate must be an integer in 1..60");
+  }
   return {
     sources: [
       { source: "scripts/policy.json", sha256: file.sha256, bytes: file.bytes },
     ],
     enhancedCrafting: value.enhancedCrafting,
     equipmentRandomStats: false,
+    travelRate: value.travelRate,
     staticConfig: value.staticConfig,
   };
 }
@@ -450,7 +477,7 @@ export async function convertServerData(options = {}) {
   const inventory = await readSqlInventory(sqlRoot, options.progress);
   options.progress?.("Gameplay content: collecting SQL tables");
   const tables = collectTables(inventory);
-  const scripts = await scriptInventory(root, options, policy.staticConfig);
+  const scripts = await scriptInventory(root, options, policy);
   const datasets = Object.create(null);
   for (const [name, names] of Object.entries(DOMAINS)) {
     options.progress?.(`Gameplay content: converting ${name} tables`);
@@ -466,6 +493,7 @@ export async function convertServerData(options = {}) {
     compileNpcRoutes(datasets.shops.tables, scripts.compilations),
   );
   publishPortalScripts(datasets.shops, scripts.portalScripts);
+  datasets.shops.transportSchedules = scripts.transportSchedules;
   datasets.shops.sources.push(...policy.sources);
   datasets.shops.npcCraftingPolicy = {
     enhancedCrafting: policy.enhancedCrafting,

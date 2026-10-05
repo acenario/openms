@@ -16,6 +16,7 @@ import { answerQuestDialogue } from "./interaction-quest-dialogue.js";
 import { operationFor } from "./action-rules.js";
 import { admitActor } from "./action-rules.js";
 import { portalNpcProgram, virtualNpcLease } from "./interaction-npc-lease.js";
+import { transportProperties } from "./transport-schedule.js";
 import {
   npcRewardEvents,
   publishNarrativeEvents,
@@ -248,11 +249,11 @@ function wireResponse(lease, answer) {
   return response;
 }
 
-function turnRequest(actor, lease, input) {
+function turnRequest(actor, world, lease, input) {
   requireInteraction((lease.turns ?? 0) < 2048, "SESSION_EXPIRED");
   return {
     compilation: lease.compilation,
-    environment: lease.environment,
+    environment: { ...lease.environment, events: transportProperties(world) },
     state: lease.vmState,
     profile: scriptProfile(actor.profile),
     input,
@@ -309,7 +310,7 @@ function sameDestination(first, second) {
 
 async function runTurn(actor, message, world, { lease, input }) {
   currentNpc(world, actor, lease);
-  const request = turnRequest(actor, lease, input);
+  const request = turnRequest(actor, world, lease, input);
   let result = await boundedNpcTurn(world, request);
   currentNpc(world, actor, lease);
   requireInteraction(actor.conversation === lease, "SESSION_EXPIRED");
@@ -352,7 +353,15 @@ async function prepareTurnPlan(actor, world, turn, draft) {
       "STALE_REVISION",
     );
   }
-  const request = { ...turn.request, profile: scriptProfile(draft) };
+  // A departure between the turn and its commit changes the replayed view and refuses it.
+  const request = {
+    ...turn.request,
+    environment: {
+      ...turn.request.environment,
+      events: transportProperties(world),
+    },
+    profile: scriptProfile(draft),
+  };
   const prepared = await boundedNpcTurn(world, request);
   requireInteraction(
     sameDestination(
