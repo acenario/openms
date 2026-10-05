@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import { fixture } from "./party-fixture.js";
 import { advanceCombat } from "../src/field-combat.js";
+import { bindSkillTravel, prepareSkillTravel } from "../src/field-skills.js";
+import { createSimulation } from "../../client/src/physics/simulation.js";
 
 /** One real field quantum: neutral disconnected physics, then shared combat/recovery. */
 function tick(world, field, nudge) {
@@ -74,4 +76,30 @@ test("the server map's original info/recovery multiplies both amounts", async ()
   probe.profile.mp = 100;
   advance(probe, 334);
   expect([probe.profile.hp, probe.profile.mp]).toEqual([120, 106]);
+});
+
+test("recovery keeps writing the live profile after a portal rebinds the skill runtime", async () => {
+  const probe = await grounded(100000000);
+  const { world, actor } = probe;
+  const target = await world.fieldFor(104040000);
+  const spawn = target.manifest.physics.portals.find((p) => p.name === "sp");
+  const simulation = createSimulation(target.physics, {
+    x: spawn.x,
+    y: spawn.y - 20,
+  });
+  const candidate = await prepareSkillTravel(world, actor, {
+    field: target,
+    simulation,
+    profile: structuredClone(actor.profile),
+  });
+  probe.field.characters.delete(actor.id);
+  actor.field = target;
+  actor.simulation = simulation;
+  target.characters.set(actor.id, actor);
+  bindSkillTravel(actor, candidate);
+  probe.field = target;
+  probe.profile = actor.profile;
+  probe.profile.mp = 100;
+  advance(probe, 400, actor);
+  expect(probe.profile.mp).toBe(103);
 });

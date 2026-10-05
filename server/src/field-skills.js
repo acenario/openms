@@ -792,6 +792,8 @@ export function bindSkillTravel(actor, candidate) {
   skills.resources.actor = actor;
   actor.skillField.actor = actor;
   actor.skillField.store = skills.store;
+  // The candidate store reads the detached travel draft; recovery must mutate the live one.
+  actor.skillField.recovery.store = skills.store;
   actor.skillField.hooks.rebind(actor);
   for (const [id, state] of skills.combatController.targets.states) {
     const shared = (state.mob.controllerState ??= state);
