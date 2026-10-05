@@ -108,6 +108,10 @@ compiled NPC programs change, so a catalog extracted before these commits still
 carries the old traps/blockers until extraction is re-run. The pirate test rooms
 108000501/108000502 are not packaged: Kyrin's warp there sits behind his
 `field-population` and `event-instance` traps.
+`server/test/second-job-advancement.test.js` walks a level-30 warrior through
+Dances with Balrog → 1072000 → test map → 1072004 → Dances with Balrog on the
+real `executeNpc` worker/replay path (scripts compiled from the vendored
+sources, Dark Marbles granted directly) and ends as Fighter 110.
 
 Kyrin's `scripts/npc/1090000.js` uses the same first-job transaction for job0→500
 (DEX20, gun1492000, knuckle1482000, bullets2330000×1000). Its other branches
