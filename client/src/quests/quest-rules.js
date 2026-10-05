@@ -290,7 +290,11 @@ function transaction(
   }
   const states = transactQuestStates(draft, act.quests, record.id, now);
   if (!states.ok) return states;
-  const levels = awardExperience(draft, act.exp, growth, items);
+  const levels = awardExperience(draft, act.exp, {
+    growth,
+    items,
+    random,
+  });
   const kills =
     stage === 0 ? Object.create(null) : { ...profile.quests[record.id].kills };
   draft.quests[record.id] = { state: stage + 1, kills };

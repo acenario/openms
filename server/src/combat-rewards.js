@@ -130,7 +130,11 @@ function awardMemberProgress(world, member, drafts, { mob, operation }) {
     world.now,
     { hp: 0, mp: 0 },
   );
-  const levels = awardExperience(profile, amount, growth, world.content.items);
+  const levels = awardExperience(profile, amount, {
+    growth,
+    items: world.content.items,
+    random: world.random,
+  });
   progressKills(profile, actor, world, mob.templateId);
   const context = { now: world.now, operationId: operation.operationId };
   applyOnlineFamilyProgress(

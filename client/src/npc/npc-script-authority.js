@@ -8,6 +8,7 @@ import { validateProfile } from "../profile/profile-validation.js";
 import { equipmentUpgrade } from "../items/equipment-enhancement.js";
 import { SAVED_LOCATION_TYPES } from "../profile/profile-domains.js";
 import { recalculateVitals } from "../character/character-stats.js";
+import { jobAdvancementGrowthRange } from "../character/offline-progression.js";
 import { skillPointPool } from "../skills/skill-allocation-rules.js";
 import {
   NPC_RUNTIME_LIMITS as LIMITS,
@@ -796,14 +797,9 @@ function jobEffect(turn, args) {
       profile.inventorySlots[category] += 4;
     }
   }
-  const hp =
-    job === 200
-      ? 0
-      : randomInclusive(turn, job === 100 ? 200 : 100, job === 100 ? 250 : 150);
-  const mp =
-    job === 100
-      ? 0
-      : randomInclusive(turn, job === 200 ? 100 : 25, job === 200 ? 150 : 50);
+  const growth = jobAdvancementGrowthRange(job);
+  const hp = growth.hp[1] === 0 ? 0 : randomInclusive(turn, ...growth.hp);
+  const mp = growth.mp[1] === 0 ? 0 : randomInclusive(turn, ...growth.mp);
   profile.baseMaxHP = Math.min(30000, profile.baseMaxHP + hp);
   profile.baseMaxMP = Math.min(30000, profile.baseMaxMP + mp);
   recalculateVitals(profile, turn.environment.items);

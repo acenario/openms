@@ -880,12 +880,11 @@ export class OfflineField {
   onKill(mob, showdown = 0) {
     mob.killDropRate = 1 + showdown / 100;
     const exp = this.killExperience(mob, showdown);
-    const levels = awardExperience(
-      this.store.profile,
-      exp,
-      this.hooks.growth?.(),
-      this.hooks.items,
-    );
+    const levels = awardExperience(this.store.profile, exp, {
+      growth: this.hooks.growth?.(),
+      items: this.hooks.items,
+      random: this.random,
+    });
     this.hooks.onKill?.(mob.templateId, mob);
     this.hooks.onExperience?.(exp, levels);
     if (levels > 0) this.hooks.onEffect?.("LevelUp");

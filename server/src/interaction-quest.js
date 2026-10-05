@@ -15,6 +15,7 @@ import {
   currentNpc,
   requireInteraction,
   serverRandomSamples,
+  sampleReader,
   INTERACTION_LIMITS,
 } from "./interaction-common.js";
 import { operationFor, admitActor } from "./action-rules.js";
@@ -279,7 +280,7 @@ export async function commitSilentQuest(actor, message, world, silent) {
 /** EXP, quest rewards and every mirrored family level effect share one durable cohort. */
 function commitQuest(actor, message, world, plan) {
   const now = Date.now();
-  const sample = serverRandomSamples()[0];
+  const samples = serverRandomSamples();
   const ids = [...new Set([actor.id, ...familyProgressIds(actor.profile)])];
   return world.participants.commit(
     actor,
@@ -300,7 +301,8 @@ function commitQuest(actor, message, world, plan) {
         selected: message.action.rewardChoice,
         growth,
         items: world.content.items,
-        random: () => sample,
+        // First sample keeps the weighted-reward draw; level-up rolls read the following ones.
+        random: sampleReader(samples),
         now,
       });
       requireInteraction(

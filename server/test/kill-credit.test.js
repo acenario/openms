@@ -134,3 +134,20 @@ test("a level-up reward publishes its original foreign effect to the whole field
     effects.every(({ message }) => message.event.actorId === first.id),
   ).toBe(true);
 });
+
+test("an online kill level-up rolls the original Magician HP/MP growth", async () => {
+  const { world, actors, saved } = await fixture();
+  const [first] = actors;
+  const mob = monster();
+  recordKillDamage(first, mob, 100);
+  first.profile.exp = experienceRequired(first.profile.level) - 30;
+  first.profile.int = 100;
+  mob.alive = false;
+  mob.deaths = 1;
+  world.random = () => 0;
+  await rewardKill(world, first, mob);
+  // Cosmic Character.levelUp: Magician rand(10,14)/rand(22,24) + INT100/20.
+  expect(saved.get(first.id).level).toBe(121);
+  expect(saved.get(first.id).baseMaxHP).toBe(1000 + 10);
+  expect(saved.get(first.id).baseMaxMP).toBe(2000 + 22 + 5);
+});

@@ -810,6 +810,9 @@ export function validateCharacterId(id) {
 }
 
 /** Explicit provisional beginner policy, not recovered original character grants. */
+/** Created-character base vitals (createProfile below); recalculation starts here. */
+export const STARTING_VITALS = Object.freeze({ hp: 50, mp: 30 });
+
 export function createProfile(location) {
   if (!location) {
     throw profileError(
@@ -829,12 +832,12 @@ export function createProfile(location) {
     exp: 0,
     meso: 0,
     fame: 0,
-    hp: 50,
-    maxHP: 50,
-    baseMaxHP: 50,
-    mp: 30,
-    maxMP: 30,
-    baseMaxMP: 30,
+    hp: STARTING_VITALS.hp,
+    maxHP: STARTING_VITALS.hp,
+    baseMaxHP: STARTING_VITALS.hp,
+    mp: STARTING_VITALS.mp,
+    maxMP: STARTING_VITALS.mp,
+    baseMaxMP: STARTING_VITALS.mp,
     str: 12,
     dex: 5,
     int: 4,

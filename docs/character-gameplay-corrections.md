@@ -8,11 +8,40 @@ Full snapshots also publish inventory, level and skill changes. A snapshot for t
 
 ## Earned points
 
-`awardExperience` grants five AP per earned level, with the Cosmic Cygnus bonuses from `Character.levelUp` (lines 6308–6321). It no longer assigns STR, DEX, INT and LUK automatically. The existing local EXP threshold and base HP/MP growth remain unchanged; these are not claimed as original Nexon progression tables.
+`awardExperience` grants five AP per earned level, with the Cosmic Cygnus bonuses from `Character.levelUp` (lines 6308–6321). It no longer assigns STR, DEX, INT and LUK automatically. EXP thresholds and HP/MP growth follow [level progression](#level-progression).
 
 Non-beginner jobs receive three SP per earned level, following `Character.levelUpGainSp` (6257–6280). Beginners retain the executable-backed entitlement `min(level − 1, 6)` minus learned beginner ranks. The online Skill window now uses that entitlement instead of looking at ordinary SP.
 
 The requested restriction on banking SP is enforced in both allocation and display: ordinary advancement stages use separate positions in the existing ten-element `remainingSp` array: first job 0, second 1, third 2, fourth 3. Evan retains positions 0–9 for its ten books. Only the selected skill's book can spend its own balance, so first-job points cannot purchase second-job skills. Existing legacy pooled SP remains in position 0; its historical earning stage cannot be recovered reliably. No existing balances or allocated stats are rewritten. Advancement-stage separation is the requested application policy, not a claim that the original executable maintained four ordinary wire pools.
+
+## Level progression
+
+[`offline-progression.js`](../client/src/character/offline-progression.js) is the single online/offline path for kill and quest level gains.
+
+**EXP table (original client).** `Maplestory_UNPACKED.exe` (SHA-256 `1198fa57…d4df`) has a static `NEXTLEVEL` initializer at `0078c89c` (`ecx = 0x00bef230`) calling the constructor `0078c8a6`. That constructor first fills formula-derived values and then overwrites every level 1–199 with `mov dword [esi+4*level], imm` stores at `0078c9f1..0078d14e`; `0078d158` stores 0 for level 200. The getter `0078d166` returns `[0x00bef230+4*level]`, clamping level <1 to 1 and returning `0x7fffffff` above 200. `NEXT_LEVEL_EXP` is those 199 immediates, for example 1→2 15, 8→9 840, 29→30 55816, 69→70 1564600, 199→200 1608855764. Cosmic `ExpTable.exp` differs at 62 levels. Most of those differences are 1–3 EXP, but Cosmic also swaps levels 9 and 10 (the client stores 1242 then 1144) and differs substantially at 30, 47, 59, 144, 162, 163 and 198. The client table wins. Reproduce:
+
+```sh
+objdump -d --x86-asm-syntax=intel --start-address=0x78c9f1 --stop-address=0x78d166 \
+  ../Maplestory-Client/Maplestory_UNPACKED.exe | grep -E 'mov\s+dword ptr \[(esi \+ 0x[0-9a-f]+|edi)\], 0x'
+```
+
+`[edi]` at `0078cb8a` is level 51 (`edi = esi+0xcc` from `0078c9cb`). Stored `exp` keeps its existing meaning: progress within the current level, reduced by the threshold on level-up (Cosmic `Character.levelUp` `takeexp`). No migration is needed. A stored value already at or above the new threshold levels on the next EXP award, because the `awardExperience` loop drains every reached threshold.
+
+**HP/MP per level (Cosmic server reference).** The client receives level-up maxima from the server, so it has no growth table. The rules use Cosmic `Character.levelUp` 6323–6371, where `Randomizer.rand(a,b)` is inclusive (`a + floor(r·(b−a+1))`):
+
+| Job (Cosmic `isA`)                       | HP    | MP                                          |
+| ---------------------------------------- | ----- | ------------------------------------------- |
+| Beginner 0/1000/2000                     | 12–16 | 10–12                                       |
+| Warrior, Dawn Warrior                    | 24–28 | 4–6                                         |
+| Magician, Blaze Wizard                   | 10–14 | 22–24                                       |
+| Bowman, Thief, Wind Archer, Night Walker | 20–24 | 14–16                                       |
+| Pirate, Thunder Breaker                  | 22–28 | 18–23                                       |
+| Aran                                     | 44–48 | 4–8 (Cosmic `+floor(aids·0.1)` is always 0) |
+| GM 9xx                                   | 30000 | 30000                                       |
+
+MP also gains total INT (base plus equipment) divided by 20 for the Magician job style (families 2/12/22) or by 10 otherwise. This uses `config.yaml:226 USE_RANDOMIZE_HPMP_GAIN: true`. Temporary INT buffs are not counted. Learned Improved MaxHP Increase (1000001/11000000/5100000/15100000) and Improved MaxMP Increase (2000001/12000000) add their WZ `x` through `learnedGrowth`. Base maxima stay capped at 30000. The kill path uses `world.random`. The online quest path reads `serverRandomSamples` in order: sample 0 remains the weighted-reward draw. Offline play uses its field/quest random hooks. A level-up without a random source fails closed. Job-advancement HP/MP uses Cosmic `changeJob` 1193–1210 (`jobAdvancementGrowthRange`), shared with the first-job NPC effect.
+
+**One-off recalculation.** `expectedBaseVitals({ job, level, advancements, int, ap, skills }, catalog)` returns the expected `baseMaxHP`/`baseMaxMP` from creation values 50/30. Past rolls are unknown, so every range uses its truncated mean `trunc((min+max)/2)`. Unknown advancement levels default to 8 for Magicians and 10 for other first jobs, then 30, 70 and 120. Growth-skill ranks apply from the level at which they were held. INT defaults to the minimum 4, which gives a lower bound. AP spent on HP/MP is valued at the final job's AssignAP midpoint plus its INT term, without skill `y`. It is a pure function; applying it to stored characters is a separate one-off script.
 
 ## Incoming monster hits
 

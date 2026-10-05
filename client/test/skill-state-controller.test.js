@@ -125,11 +125,12 @@ test("MP growth uses learned x at level-up and excludes expired grants", () => {
   const catalog = { 2000001: { levels: { 1: { x: 2, y: 1 } } } };
   const growth = { hp: 0, mp: 0 };
   learnedGrowth(profile, catalog, 1000, growth);
-  awardExperience(profile, 15, growth, {});
-  expect(profile.baseMaxMP).toBe(105);
+  // Magician minimum roll 22, learned x2 and INT10/20=0 (Cosmic Character.levelUp).
+  awardExperience(profile, 15, { growth, items: {}, random: () => 0 });
+  expect(profile.baseMaxMP).toBe(124);
   learnedGrowth(profile, catalog, 2000, growth);
-  awardExperience(profile, 60, growth, {});
-  expect(profile.baseMaxMP).toBe(108);
+  awardExperience(profile, 34, { growth, items: {}, random: () => 0 });
+  expect(profile.baseMaxMP).toBe(146);
 });
 
 test("Beholder schedules stop at summon expiry and Hex starts at its actual tick", () => {
