@@ -50,7 +50,10 @@ export async function questBook(game = "http://127.0.0.1:3102") {
   function describe(q, level) {
     const [s0, s1 = { check: {}, act: {} }] = q.stages;
     const lv = `${s0.check.lvmin ?? 1}–${s0.check.lvmax ?? "any"}`;
-    const pre = s0.check.quests.map((p) => `${qName(p.id)} (${p.id})`).join(", ");
+    const pre = [
+      ...s0.check.quests.filter((p) => p.state >= 1).map((p) => `${qName(p.id)} (${p.id})${p.state === 1 ? " in progress" : ""}`),
+      ...s0.check.quests.filter((p) => p.state === 0 && p.id !== q.id).map((p) => `not ${qName(p.id)} (${p.id})`),
+    ].join(", ");
     const need = objectives(q).map((o) => `${o.kind} ${o.name} ×${o.count}`).join(", ") || "talk to end NPC";
     const gives = [
       s1.act.exp ? `${s1.act.exp} EXP` : null,

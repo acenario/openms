@@ -9,6 +9,7 @@
 //   ladder-sides walk 60 px left of the ladder → climb, drop, walk 60 px right → climb, drop
 //   drop         down+jump through the floor twice (the "drop 2 levels" course); success = y grew
 //   portal       travel to the exit that is lowest relative to you, then travel back
+//   nav          goto {x,y} the highest, middle and lowest platforms nav.js can plan to, then back
 // Every step is appended to logs/<name>/drills.jsonl with the body/brain version, so a behavior
 // edit (hot-reloaded brain.js) can be compared with the run before it.
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
@@ -24,7 +25,7 @@ const { values: o } = parseArgs({
   strict: true,
 });
 if (!o.name) throw new Error("--name required (your own body only)");
-if (o.port === "3310") throw new Error("3310 is Lumen's body; drill your own");
+if (o.port === "3310" && o.name !== "Lumen") throw new Error("3310 is Lumen's body; drill your own");
 const DIR = join(import.meta.dir, "logs", o.name.toLowerCase());
 const EPISODES = join(DIR, "episodes.jsonl");
 const DRILLS = join(DIR, "drills.jsonl");
@@ -90,6 +91,25 @@ const COURSES = {
   async drop() {
     await record("drop", "drop-1", await drop());
     await record("drop", "drop-2", await drop());
+  },
+  async nav() {
+    // Visit up to 3 other platforms (highest, middle, lowest that nav.js can plan to), then come back.
+    const ctx = await get("/context");
+    const mapId = Number(ctx.map.match(/\((\d+)\)$/)[1]);
+    const { navigator } = await import("./nav.js");
+    const n = await navigator("http://127.0.0.1:3102")(mapId);
+    const start = ctx.me;
+    const centre = (p) => ({ x: Math.round((p.x1 + p.x2) / 2), y: Math.round(n.yAt(p, Math.round((p.x1 + p.x2) / 2)) ?? 0) });
+    const here = n.at(start.x, start.y);
+    const reachable = n.plats.filter((p) => p !== here && p.x2 - p.x1 > 60 && n.plan(start, centre(p))?.length)
+      .sort((a, b) => centre(a).y - centre(b).y);
+    if (!reachable.length) return record("nav", "find", { outcome: "skipped", reason: "no other reachable platform", durationMs: 0 });
+    const picks = [...new Set([reachable[0], reachable[Math.floor(reachable.length / 2)], reachable.at(-1)])];
+    for (const p of [...picks, here]) {
+      const c = p === here ? { x: start.x, y: start.y } : centre(p);
+      const steps = n.plan((await me()), c)?.length ?? "?";
+      await record("nav", `to y${c.y} (${steps} steps)`, await episode({ type: "goto", x: c.x, y: c.y }, 70000));
+    }
   },
   async portal() {
     const ctx = await get("/context");

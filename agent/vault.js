@@ -7,6 +7,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
+import { questBook } from "./quests.js";
 
 const { values: opts } = parseArgs({
   options: {
@@ -20,7 +21,8 @@ const ORIGIN = new URL(opts.game).origin;
 const OUT = opts.out;
 const WORLD = join(OUT, "World");
 const CACHE = join(OUT, ".cache");
-const c = await (await fetch(`${ORIGIN}/generated/catalog.json`)).json();
+const book = await questBook(opts.game); // server verdicts (OK / UNSUPPORTED / GATED / UNREACHABLE)
+const c = book.c;
 
 // ---------- names & links ----------
 const safe = (s) => String(s).replace(/[\\/:*?"<>|#^[\]]/g, "").replace(/\s+/g, " ").trim();
@@ -100,6 +102,12 @@ for (const [id, f] of Object.entries(facts)) {
 for (const [mob, list] of Object.entries(c.spawns.mobs ?? {}))
   for (const s of list) (mobMaps[mob] ??= new Map()).set(s.mapId, Math.max(s.count, mobMaps[mob].get(s.mapId) ?? 0));
 const questIds = Object.keys(c.quests.records).filter((id) => quest(id)?.name);
+// Drop tables (server data): mob -> rows, item -> [{mob, row}].
+const mobDrops = (mob) => (c.drops?.mobs?.[String(mob)]?.rows ?? []).filter((r) => Number(r.itemId) !== 0);
+const droppedBy = {};
+for (const [mob, v] of Object.entries(c.drops?.mobs ?? {})) for (const r of v.rows) (droppedBy[r.itemId] ??= []).push({ mob, r });
+const pct = (chance) => `${((100 * chance) / 1e6).toPrecision(2)}%`;
+const questOnly = (r) => (r.questId ? ` (only during ${link(questNote(r.questId))})` : "");
 for (const id of questIds) {
   const [start, end] = quest(id).stages ?? [];
   if (start?.check?.npc) (questsByNpc[start.check.npc] ??= { starts: [], ends: [] }).starts.push(id);
@@ -167,11 +175,25 @@ for (const id of questIds) {
     ...(end?.act?.items ?? []).filter((i) => i.count > 0).map((i) => `- ${link(itemNote(i.id))} ×${i.count}`),
     end?.act?.nextQuest ? `- unlocks ${link(questNote(end.act.nextQuest))}` : null,
   ].filter(Boolean);
-  write("Quests", questNote(id), `${fm({ type: "quest", id: Number(id), name: r.name, levels: levelRange(start), supported: r.supported ?? null, tags: ["quest"] })}
+  let server;
+  try { server = book.verdict(r); } catch { server = "UNKNOWN (verdict failed on this record)"; }
+  const pre = start?.check?.quests ?? [];
+  const startNeeds = [
+    `- Level ${levelRange(start)}`,
+    ...pre.filter((q) => q.state >= 1).map((q) => `- ${q.state === 1 ? "Have started" : "Have finished"} ${link(questNote(q.id))}`),
+    ...pre.filter((q) => q.state === 0 && String(q.id) !== String(id)).map((q) => `- Must NOT have started ${link(questNote(q.id))} (other branch)`),
+    ...(start?.check?.items ?? []).filter((i) => i.count > 0).map((i) => `- Own ${link(itemNote(i.id))} ×${i.count}`),
+  ];
+  write("Quests", questNote(id), `${fm({ type: "quest", id: Number(id), name: r.name, levels: levelRange(start), supported: r.supported ?? null, server: server.split(" ")[0], tags: ["quest"] })}
 # ${r.name}
 
 **Starts with:** ${start?.check?.npc ? link(npcNote(start.check.npc)) : "auto/unknown"} · **Ends with:** ${end?.check?.npc ? link(npcNote(end.check.npc)) : "unknown"} · **Level:** ${levelRange(start)}${start?.check?.jobs?.length ? ` · **Jobs:** ${start.check.jobs.join(", ")}` : ""}
-${(start?.check?.quests ?? []).length ? `\n**Requires quests:** ${start.check.quests.map((q) => link(questNote(q.id))).join(", ")}\n` : ""}
+
+**Server:** ${server}
+
+## To start
+${startNeeds.join("\n")}
+
 ## To complete
 ${needs.join("\n") || "- talk to the end NPC"}
 
@@ -196,6 +218,9 @@ for (const [mob, maps] of Object.entries(mobMaps)) {
 
 ## Found in
 ${[...maps].map(([m, n]) => `- ${link(mapNote(m))} ×${n}`).join("\n")}
+
+## Drops
+${mobDrops(mob).sort((a, b) => b.chance - a.chance).map((r) => `- ${link(itemNote(r.itemId))} ${pct(r.chance)}${questOnly(r)}`).join("\n") || "- none recorded"}
 `);
   counts.mobs++;
 }
@@ -206,6 +231,9 @@ for (const [item, qs] of Object.entries(itemUses)) {
 
 ## Used in quests
 ${[...qs].map((q) => `- ${link(questNote(q))}`).join("\n")}
+
+## Dropped by
+${(droppedBy[item] ?? []).sort((a, b) => b.r.chance - a.r.chance).map(({ mob, r }) => `- ${link(mobNote(mob))} ${pct(r.chance)}${questOnly(r)}`).join("\n") || "- no monster (boxes/reactors or NPCs: \`bun agent/drops.js --item ${item}\`)"}
 `);
   counts.items++;
 }

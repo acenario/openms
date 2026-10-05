@@ -8,7 +8,11 @@
 //   bun agent/memory.js mail --name X [--to Y] --subject S --body "..."
 //   bun agent/memory.js inbox --name X [--mark-read]
 //   bun agent/memory.js who                          online characters and their maps (game DB, read-only)
-//   bun agent/memory.js find --player arjun1         where a character is / was last seen
+//   bun agent/memory.js find --player arjun        where a character is / was last seen
+//   bun agent/memory.js ask --name X --to OWNER --area A --title T [--body B]   structured request
+//   bun agent/memory.js asks [--name X]              open/claimed asks (to X, or all)
+//   bun agent/memory.js claim --name X --id N        / done --name X --id N --body "how"
+//   bun agent/memory.js decline --name X --id N --body "why"
 // --database-url defaults to the local development database.
 import { SQL } from "bun";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -34,8 +38,8 @@ export function memory(url = DEFAULT_URL) {
           personality = COALESCE(EXCLUDED.personality, agent.agents.personality), updated_at = now()`;
     },
     async episode(agent, e) {
-      await sql`INSERT INTO agent.episodes (agent, version, goal_type, goal, outcome, reason, metrics, map_id, started_at, duration_ms)
-        VALUES (${agent}, ${e.version ?? "?"}, ${e.goal?.type ?? "?"}, ${e.goal ?? {}}, ${e.outcome}, ${e.reason ?? null},
+      await sql`INSERT INTO agent.episodes (agent, version, overlay, goal_type, goal, outcome, reason, metrics, map_id, started_at, duration_ms)
+        VALUES (${agent}, ${e.version ?? "?"}, ${e.overlay ?? null}, ${e.goal?.type ?? "?"}, ${e.goal ?? {}}, ${e.outcome}, ${e.reason ?? null},
           ${e.metrics ?? {}}, ${e.mapId ?? null}, ${new Date(e.started ?? Date.parse(e.t))}, ${e.durationMs ?? 0})`;
     },
     async event(agent, record) {
@@ -79,6 +83,7 @@ if (import.meta.main) {
       type: { type: "string" }, limit: { type: "string", default: "20" },
       topic: { type: "string" }, body: { type: "string" }, links: { type: "string" }, confidence: { type: "string" },
       to: { type: "string" }, player: { type: "string" }, subject: { type: "string" }, "mark-read": { type: "boolean", default: false },
+      area: { type: "string" }, title: { type: "string" }, id: { type: "string" }, by: { type: "string" },
     },
     strict: true,
   });
@@ -116,12 +121,33 @@ if (import.meta.main) {
       console.log("lesson saved");
     } else if (command === "lessons") {
       const rows = await m.sql`SELECT agent, topic, confidence, body, links, created_at FROM agent.lessons
-        WHERE (${o.topic ?? null}::text IS NULL OR topic ILIKE ${"%" + (o.topic ?? "") + "%"})
+        WHERE superseded_by IS NULL
+          AND (${o.topic ?? null}::text IS NULL OR topic ILIKE ${"%" + (o.topic ?? "") + "%"})
           AND (${o.name ?? null}::text IS NULL OR agent = ${o.name ?? null}) ORDER BY created_at DESC LIMIT ${Number(o.limit)}`;
       for (const r of rows) console.log(`[${r.agent} · ${r.topic} · ${r.confidence}] ${r.body}${r.links.length ? `  (${r.links.map((l) => `[[${l}]]`).join(" ")})` : ""}`);
+    } else if (command === "supersede") {
+      // A wrong lesson stays for history but stops being served: --id <wrong> --by <correcting lesson>
+      await m.sql`UPDATE agent.lessons SET superseded_by = ${Number(need("by"))} WHERE id = ${Number(need("id"))}`;
+      console.log(`lesson #${o.id} superseded by #${o.by}`);
     } else if (command === "mail") {
       await m.mail(need("name"), o.to ?? null, need("subject"), need("body"));
       console.log("sent");
+    } else if (command === "ask") {
+      const [row] = await m.sql`INSERT INTO agent.requests (from_agent, to_agent, area, title, body)
+        VALUES (${need("name")}, ${need("to")}, ${need("area")}, ${need("title")}, ${o.body ?? ""}) RETURNING id`;
+      console.log(`ask #${row.id} → ${o.to} (${o.area}): ${o.title}`);
+    } else if (command === "asks") {
+      const rows = await m.sql`SELECT id, from_agent, to_agent, area, title, body, status, resolution, created_at FROM agent.requests
+        WHERE status IN ('open', 'claimed') AND (${o.name ?? null}::text IS NULL OR to_agent = ${o.name ?? null}) ORDER BY created_at`;
+      for (const r of rows) console.log(`#${r.id} [${r.status}] ${r.from_agent} → ${r.to_agent} · ${r.area} · ${r.title}${r.body ? `\n    ${r.body}` : ""}`);
+      if (!rows.length) console.log("no open asks");
+    } else if (["claim", "done", "decline"].includes(command)) {
+      const status = { claim: "claimed", done: "done", decline: "declined" }[command];
+      const rows = await m.sql`UPDATE agent.requests SET status = ${status}, resolution = COALESCE(${o.body ?? null}, resolution), updated_at = now()
+        WHERE id = ${Number(need("id"))} RETURNING id, from_agent, title`;
+      if (!rows.length) throw new Error(`no ask #${o.id}`);
+      if (command !== "claim") await m.mail(need("name"), rows[0].from_agent, `ask #${rows[0].id} ${status}: ${rows[0].title}`, o.body ?? "");
+      console.log(`ask #${o.id} ${status}`);
     } else if (command === "who" || command === "find") {
       const game = "http://127.0.0.1:3102";
       const names = await fetch(`${game}/generated/catalog.json`).then((r) => r.json()).then((c) => c.mapNames).catch(() => ({}));
@@ -132,7 +158,7 @@ if (import.meta.main) {
     } else if (command === "inbox") {
       for (const r of await m.inbox(need("name"), o["mark-read"])) console.log(`#${r.id} ${r.from_agent} → ${r.to_agent ?? "all"} · ${r.subject}\n  ${r.body}`);
     } else {
-      throw new Error("commands: migrate | register | import | episodes | lesson | lessons | mail | inbox | who | find");
+      throw new Error("commands: migrate | register | import | episodes | lesson | lessons | supersede | mail | inbox | who | find | ask | asks | claim | done | decline");
     }
   } finally {
     await m.close();

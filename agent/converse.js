@@ -37,6 +37,7 @@ async function nextTurn(from, ms = 8000) {
 }
 
 // Resume a conversation that is already open (last npc turn not followed by npc-closed).
+let accepted = false;
 let turn = lines().map((l) => JSON.parse(l)).filter((e) => e.kind === "npc" || e.kind === "npc-closed").at(-1) ?? null;
 if (turn?.kind === "npc" && turn.npc !== o.npc) turn = null;
 for (let step = 0; step < Number(o.steps); step++) {
@@ -60,6 +61,7 @@ for (let step = 0; step < Number(o.steps); step++) {
   else { console.log("[converse] unhandled turn:", JSON.stringify(turn)); process.exit(1); }
   const r = await goal(g);
   console.log(`[converse] ${g.type} ${g.answer ?? g.npc ?? ""} ${g.value ?? ""} -> ${r.sent ?? ""} ${r.result ?? r.error ?? ""}`);
+  if (!r.ok && /no open conversation/.test(r.error ?? "")) { turn = null; continue; } // stale turn from the log: start over
   if (!r.ok) process.exit(1);
   if (r.sent === "quest.claim" && r.result === "OK") {
     await nextTurn(mark, 3000).then((t) => t?.kind === "npc" && t.type === "say" && !t.canNext && goal({ type: "reply", answer: "close" }));
@@ -67,6 +69,8 @@ for (let step = 0; step < Number(o.steps); step++) {
     process.exit(0);
   }
   turn = await nextTurn(mark, g.type === "talk" ? 15000 : 8000);
+  if (r.sent === "quest.accept" && r.result === "OK") accepted = true;
+  if (!turn && accepted) { console.log("[converse] quest accepted; this NPC has nothing more — finish it at the end NPC (questlog.js)"); process.exit(2); }
   if (!turn) { console.log("[converse] no reply from NPC (dead quest? check quests.js)"); process.exit(1); }
   if (turn.kind === "npc") console.log(`   ${turn.npc} [${turn.type}${turn.quest ? ` ${turn.quest.mode}/${turn.quest.stage}` : ""}] ${turn.text.replace(/\s+/g, " ").slice(0, 140)}`);
 }
