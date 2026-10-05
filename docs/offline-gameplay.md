@@ -80,7 +80,10 @@ the thief skill-book identity; existing executable-backed skill allocation
 consumers remain authoritative for learning. They do **not** establish Nexon's
 advancement eligibility or reward formulas. The Windows runtime remains unavailable.
 Hall-of-Fame PlayerNPC and party-quest progress calls are explicit unavailable
-services. Source quests absent from the original Quest Check inventory, including
+services. `cm.canSpawnPlayerNpc` is a local read that is false below the
+reference class cap (`Character.getMaxClassLevel`: Cygnus 120, otherwise 200),
+so instructors reach their job dialogue; at the cap it still traps as
+`hall-of-fame-player-npc`. Source quests absent from the original Quest Check inventory, including
 Dark Lord's server-custom100009/100011, are explicit lazy `custom-quest-progress`
 traps: a reached call fails the whole turn, rather than fabricating quest records
 or blocking an unrelated beginner branch. Advanced-job mutations are refused

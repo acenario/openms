@@ -53,6 +53,7 @@ const READS = Object.freeze({
   haveItem: ["have-item", 1, 2, "itemIds"],
   canHold: ["can-hold", 1, 2, "itemIds"],
   canHoldAll: ["can-hold-all", 1, 2, "itemIds"],
+  canSpawnPlayerNpc: ["can-spawn-player-npc", 1, 1],
 });
 
 function expressionChildren(node) {

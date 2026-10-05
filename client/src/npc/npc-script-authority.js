@@ -472,6 +472,20 @@ function gameConstantRead(kind, value) {
   }
 }
 
+/** SERVER NPCConversationManager.java:320–323 and Character.getMaxClassLevel:5303–5305:
+ *  false below the class cap (Cygnus 120, otherwise 200). Only an eligible
+ *  character needs the Hall-of-Fame PlayerNPC registry, which stays unavailable. */
+function canSpawnPlayerNpc(turn, mapId) {
+  npcInteger(mapId, 0);
+  const cap = Math.trunc(turn.profile.job / 1000) === 1 ? 120 : 200;
+  requireNpc(
+    turn.profile.level < cap,
+    "Remote NPC service unavailable: hall-of-fame-player-npc",
+    "npc-remote-service",
+  );
+  return false;
+}
+
 function parseInteger(args) {
   const value = npcPrimitive(args[0]);
   const radix = args.length === 2 ? npcInteger(args[1]) : 0;
@@ -543,6 +557,8 @@ function readNpcPure(turn, kind, args) {
     case "first-job-stat-requirement":
     case "can-get-first-job":
       return firstJobRead(turn, kind, args);
+    case "can-spawn-player-npc":
+      return canSpawnPlayerNpc(turn, args[0]);
     case "can-hold-all":
       return canHoldAll(turn, args);
     default:

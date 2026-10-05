@@ -138,7 +138,6 @@ export function npcRemoteService(node, portal = false) {
 
 function remoteCall(node) {
   const method = cmMethod(node);
-  if (method === "canSpawnPlayerNpc") return "hall-of-fame-player-npc";
   if (Object.hasOwn(UNAVAILABLE_CALLS, method)) {
     return UNAVAILABLE_CALLS[method];
   }

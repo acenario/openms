@@ -94,6 +94,7 @@ export const NPC_READ_TYPES = Object.freeze({
   "number-with-commas": [1, 1],
   "parse-int": [1, 2],
   "hall-of-fame-map": [1, 1],
+  "can-spawn-player-npc": [1, 1],
   "skill-book": [1, 1],
   "is-cygnus": [1, 1],
   "is-aran": [1, 1],
