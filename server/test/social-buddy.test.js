@@ -134,3 +134,26 @@ test("an offline buddy can queue requests from different senders without duplica
   expect(first.profile.social.friends[0].id).toBe(receiver.id);
   expect(second.profile.social.friends[0].id).toBe(receiver.id);
 });
+
+// Cosmic USE_PARTY_FOR_STARTERS reaches the shared rule through the published catalog policy.
+test("USE_PARTY_FOR_STARTERS gates a level 1 Beginner's party.create on the server", async () => {
+  const probe = fixture(),
+    [beginner] = probe.actors;
+  await expect(
+    execute(probe, beginner, { kind: "party.create" }),
+  ).rejects.toThrow("cannot form a party");
+  const catalog = content.catalog;
+  probe.world.content = Object.create(content, {
+    catalog: {
+      value: {
+        ...catalog,
+        serverData: {
+          ...catalog.serverData,
+          policy: { USE_PARTY_FOR_STARTERS: true },
+        },
+      },
+    },
+  });
+  await execute(probe, beginner, { kind: "party.create" });
+  expect(beginner.profile.social.party.members).toEqual([beginner.id]);
+});

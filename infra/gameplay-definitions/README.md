@@ -17,7 +17,7 @@ The source files are data for the bounded compiler, never directly evaluated as 
 
 ## Local policy
 
-[policy.json](policy.json) contains only the seven settings consumed by conversion, extracted from the supplied Cosmic configuration. No Java files, Java file hashes, full `config.yaml`, credentials or deployment settings are needed. The converter validates schema version 1 and hashes this small policy file for generated provenance.
+[policy.json](policy.json) contains only the eight settings consumed by conversion, extracted from the supplied Cosmic configuration. No Java files, Java file hashes, full `config.yaml`, credentials or deployment settings are needed. The converter validates schema version 1 and hashes this small policy file for generated provenance.
 
 | Setting | Imported value | Consumer |
 | --- | --- | --- |
@@ -28,6 +28,7 @@ The source files are data for the bounded compiler, never directly evaluated as 
 | `staticConfig.USE_AUTOASSIGN_STARTERS_AP` | `true` | NPC static branch compilation |
 | `staticConfig.USE_STARTING_AP_4` | `false` | NPC static branch compilation |
 | `staticConfig.USE_ENFORCE_JOB_SP_RANGE` | `false` | NPC static branch compilation |
+| `staticConfig.USE_PARTY_FOR_STARTERS` | `false` | Published as `catalog.serverData.policy` for the server and browser party rule (`canFormParty`). `true` lets Beginners/Noblesses/Legends below level 10 form parties; see the [party formation gate](../../docs/offline-binding-actions.md) |
 
 Enhanced crafting must remain `false` until its effects are implemented. Equipment random stats remain an explicit unsupported policy (`false`) in the converter. Unknown fields, missing settings and nonboolean settings fail validation rather than selecting implicit defaults.
 

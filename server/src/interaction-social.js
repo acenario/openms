@@ -10,6 +10,7 @@ import {
   admitContact,
   admitInvitationPreference,
 } from "../../client/src/social/local-social-context.js";
+import { partyForStarters } from "../../client/src/profile/profile-social.js";
 import { validateSocialCommit } from "../../client/src/profile/profile-social-transaction.js";
 import { admitActor, operationFor, ruleError } from "./action-rules.js";
 import {
@@ -155,6 +156,7 @@ function socialOptions(world, actor, request, travel) {
       familyRates: world.familyRates === true,
       familyTravel: typeof world.travelParticipants === "function",
       emblems: world.content.catalog.ui.social?.emblems,
+      partyForStarters: partyForStarters(world.content.catalog),
     },
     sameField: (left, right) => sameLiveField(world, left, right),
     admitPhysical(drafts) {

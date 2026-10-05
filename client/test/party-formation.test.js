@@ -6,13 +6,14 @@ import {
   CONTACT_ACTIONS,
 } from "../src/social/local-social-actions.js";
 
-function run(profiles, actorId, action, payload = {}) {
+function run(profiles, actorId, action, { capabilities, ...payload } = {}) {
   const context = new SocialContext(
     profiles,
     actorId,
     { requestId: action, ...payload },
     0,
   );
+  context.capabilities = capabilities;
   return CONTACT_ACTIONS[action](context);
 }
 
@@ -55,4 +56,29 @@ test("a level 9 Magician can create, invite and accept", () => {
   );
   expect(party.get("c0").social.party.members).toEqual(["c0", "c1"]);
   expect(() => run(party, "c0", "party.invite", { targetId: "c2" })).toThrow();
+});
+
+// Cosmic USE_PARTY_FOR_STARTERS server policy (infra/gameplay-definitions/policy.json).
+test("USE_PARTY_FOR_STARTERS admits level 9 beginners only when enabled", () => {
+  const off = profiles([0, 9]);
+  expect(() =>
+    run(off, "c0", "party.create", {
+      capabilities: { partyForStarters: false },
+    }),
+  ).toThrow("cannot form a party");
+  const on = { partyForStarters: true };
+  const party = profiles([0, 9], [1000, 9], [2000, 1]);
+  run(party, "c0", "party.create", { capabilities: on });
+  run(party, "c0", "party.invite", { targetId: "c1", capabilities: on });
+  const context = new SocialContext(party, "c1", { requestId: "accept" }, 0);
+  context.capabilities = on;
+  acceptParty(context, party.get("c1").social.invitations[0]);
+  expect(party.get("c0").social.party.members).toEqual(["c0", "c1"]);
+  party.get("c2").settings.gameOptions.allowPartySearch = true;
+  run(party, "c2", "search.register", {
+    minLevel: 1,
+    maxLevel: 200,
+    capabilities: on,
+  });
+  expect(party.get("c2").social.search).toBeTruthy();
 });

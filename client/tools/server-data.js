@@ -24,6 +24,7 @@ const POLICY_KEYS = [
   "USE_AUTOASSIGN_STARTERS_AP",
   "USE_STARTING_AP_4",
   "USE_ENFORCE_JOB_SP_RANGE",
+  "USE_PARTY_FOR_STARTERS",
 ];
 const MAX_POLICY_BYTES = 4096;
 const MAX_FILES = 10000;
@@ -520,7 +521,11 @@ export async function convertServerData(options = {}) {
     ],
     summary,
   };
-  return { report, datasets };
+  // Runtime switches read from the catalog by the server and browser rules.
+  const runtimePolicy = {
+    USE_PARTY_FOR_STARTERS: policy.staticConfig.USE_PARTY_FOR_STARTERS,
+  };
+  return { report, datasets, policy: runtimePolicy };
 }
 
 /** Uses the same immutable resource publisher and descriptor contract as extraction. */
@@ -549,6 +554,7 @@ export async function extractServerData(options) {
   return {
     schemaVersion: 2,
     authority: AUTHORITY,
+    policy: converted.policy,
     datasets,
     report,
     summary: converted.report.summary,

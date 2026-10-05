@@ -31,11 +31,18 @@ export const SOCIAL_LIMITS = Object.freeze({
   guildCapacity: 10,
 });
 /** Native 0052fce1/0052fecf refuse jobs 0/1000/2000/2001 below level10 with string 0x14c1;
- * other jobs (a level8 Magician) may form parties. See docs/offline-binding-actions.md. */
+ * other jobs (a level8 Magician) may form parties. See docs/offline-binding-actions.md.
+ * partyForStarters is the Cosmic USE_PARTY_FOR_STARTERS server policy switch (default false). */
 export const PARTY_FORMATION_REFUSAL =
   "Characters whose level is below Lv. 10, such as Beginners, Noblesses, and Legends cannot form a party.";
-export function canFormParty({ job, level }) {
-  return level >= 10 || ![0, 1000, 2000, 2001].includes(job);
+export function canFormParty({ job, level }, partyForStarters = false) {
+  return (
+    partyForStarters || level >= 10 || ![0, 1000, 2000, 2001].includes(job)
+  );
+}
+/** Published gameplay policy from the catalog; absent means the original client rule. */
+export function partyForStarters(catalog) {
+  return catalog?.serverData?.policy?.USE_PARTY_FOR_STARTERS === true;
 }
 export const SOCIAL_KINDS = Object.freeze([
   "friend",

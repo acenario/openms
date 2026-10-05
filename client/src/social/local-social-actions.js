@@ -221,7 +221,7 @@ function partyCreate(context) {
     "Already have joined a party.",
   );
   socialRequire(
-    canFormParty(self),
+    canFormParty(self, context.capabilities?.partyForStarters),
     "party-requirements",
     PARTY_FORMATION_REFUSAL,
   );
@@ -238,7 +238,8 @@ function partyInvite(context) {
   const party = context.group("party"),
     target = context.target();
   socialRequire(
-    !target.social.party && canFormParty(target),
+    !target.social.party &&
+      canFormParty(target, context.capabilities?.partyForStarters),
     "party-requirements",
     "The invited character is already in a party or is a Beginner, Noblesse or Legend below Lv. 10.",
   );
@@ -263,7 +264,7 @@ export function acceptParty(context, request) {
     "The party invitation is no longer applicable.",
   );
   socialRequire(
-    canFormParty(self),
+    canFormParty(self, context.capabilities?.partyForStarters),
     "party-requirements",
     PARTY_FORMATION_REFUSAL,
   );
@@ -447,7 +448,7 @@ function searchWrite(context) {
     "Only an ungrouped character or party leader can register.",
   );
   socialRequire(
-    canFormParty(self),
+    canFormParty(self, context.capabilities?.partyForStarters),
     "search-requirements",
     PARTY_FORMATION_REFUSAL,
   );
