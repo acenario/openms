@@ -150,9 +150,24 @@ async function itemSources(context, ids) {
   return sources;
 }
 
+// Gameplay fields directly under item info (price, cash, tradeBlock, req*, inc*) are integers; a few
+// originals store them as String nodes ("1"), which the client's integer reads accept. Readers compare
+// them as numbers (an "1" incLUK broke snapshot validation, a "35" reqLevel made a glove unequippable).
+const INFO_INTEGER = /^-?\d{1,15}$/;
+
+function infoInteger(node) {
+  return typeof node.value === "string" &&
+    node.parent?.name === "info" &&
+    INFO_INTEGER.test(node.value)
+    ? Number(node.value)
+    : undefined;
+}
+
 /** Plain properties/scalars remain directly consumable; non-property nodes retain explicit type markers. */
 function metadataValue(node) {
   if (node.type === "UOL") return { $wzType: "UOL", target: node.value };
+  const integer = infoInteger(node);
+  if (integer !== undefined) return integer;
   if (node.value !== undefined) {
     if (typeof node.value === "number" && !Number.isFinite(node.value)) {
       throw new Error(`Non-finite original UI metadata ${node.name}`);
@@ -175,7 +190,7 @@ function metadataValue(node) {
 }
 
 /** Preserve every nested effect/restriction, including aliases and empty/unknown node kinds; no pixel payloads. */
-function metadataTree(root) {
+export function metadataTree(root) {
   if (!root) return Object.create(null);
   const holder = Object.create(null);
   const queue = [{ node: root, parent: holder, key: "root", depth: 0 }];
