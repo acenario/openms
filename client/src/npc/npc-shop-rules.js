@@ -11,6 +11,7 @@ import {
 
 export const SHOP_LIMITS = Object.freeze({
   rows: 8192,
+  /** Cosmic `Shop` row `ShopItem((short) 1000, ...)`, sent as the open-shop row's max-per-slot short. */
   quantity: 1000,
   mesos: 2147483647,
   listeners: 64,
@@ -159,6 +160,20 @@ function paymentPrice(row) {
   );
 }
 
+/**
+ * Largest single purchase of one shop row. The v83 client prompts for a count only for
+ * non-rechargeable Use/Setup/Etc items (`004284be`); every other row is a yes/no buy of
+ * one (`007561c1`, string 0x350). The prompt's maximum is the row's max-per-slot short
+ * decoded at `007529ad` (row+0x30, passed to the number dialog at `00756522`), not the
+ * item's slotMax or the affordable count; mesos are checked after the prompt.
+ */
+export function shopBuyLimit(itemId) {
+  const type = inventoryType(itemId);
+  return type >= 2 && type <= 4 && !isRechargeable(itemId)
+    ? SHOP_LIMITS.quantity
+    : 1;
+}
+
 function admitPurchase(profile, template, count) {
   if (Math.floor(template.id / 1000) === 5000) {
     throw profileError(
@@ -166,11 +181,7 @@ function admitPurchase(profile, template, count) {
       "This item requires its original pet instance authority.",
     );
   }
-  const maximum =
-    isRechargeable(template.id) || inventoryType(template.id) === 1
-      ? 1
-      : SHOP_LIMITS.quantity;
-  shopInteger(count, 1, maximum, "purchase quantity");
+  shopInteger(count, 1, shopBuyLimit(template.id), "purchase quantity");
   if (
     template.info.only === 1 &&
     (count > 1 ||

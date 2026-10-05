@@ -1,5 +1,10 @@
 import { inventoryType, isRechargeable } from "../items/inventory-model.js";
-import { saleEntry, salePrice, rechargeCost } from "../npc/npc-shop-rules.js";
+import {
+  saleEntry,
+  salePrice,
+  rechargeCost,
+  shopBuyLimit,
+} from "../npc/npc-shop-rules.js";
 
 /** A complete paged server offer plus catalog-only display quotes. Purchases remain server-admitted. */
 export class NativeShop {
@@ -119,8 +124,7 @@ export class NativeShop {
     if (!record) {
       throw new Error("This server shop row is no longer available.");
     }
-    const max =
-      record.rechargeable || inventoryType(record.itemId) === 1 ? 1 : 1000;
+    const max = shopBuyLimit(record.itemId);
     const quantity =
       max === 1
         ? (await this.confirm("Are you sure you want to buy it?")) === true

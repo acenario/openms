@@ -134,6 +134,8 @@ Previous follows the authored callback, not a synthetic page history. Casey **10
 
 `NpcShop` provides original buy/sell/recharge selection and native quantity/confirmation prompts. It rechecks live ownership, funds/capacity and the selected instance/quote after the prompt, then repeats validation inside the atomic draft before applying stock and currency changes. Cancel never enters the transaction; closing cannot interrupt a commit. The retained [shop replay](native-ui-validation/npc-quest/shop-verified.json) and [recharge replay](native-ui-validation/npc-quest/shop-recharge-confirmed.json) cover Mina's actual shop: buy two Red Potions for 100 mesos, sell one for 25, and recharge Subi100→500 for 125 mesos, with explicit starting-stock fixtures.
 
+The buy-quantity ceiling is not an item slotMax. In the original client the buy handler `007561c1` prompts with string0x351 ("How many are you willing to buy?") only when `004284be` classifies the row as a non-rechargeable Use/Setup/Etc item and the authored bundle is below2; equips, stars/bullets and other rows use the yes/no string0x350 and buy one. The number dialog (`00756522`) receives minimum1 and the row's max-per-slot short that the open-shop decoder `007529ad` stores at row+0x30; mesos are checked only after the prompt (string0x15df). That max is server-authored: Cosmic sends `ShopItem((short) 1000, …)` for every SQL row, so `SHOP_LIMITS.quantity` stays1,000 and a 2,000-arrow stack still takes two purchases. `shopBuyLimit()` is shared by the browser prompt and server admission. Reproduce with `clientStrings.java` (ids) and `clientFocus.java` at `007561c1,007529ad,004284be`.
+
 ## Native surface and interaction authority
 
 Main wires:
