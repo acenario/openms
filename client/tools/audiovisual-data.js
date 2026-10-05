@@ -122,6 +122,38 @@ function elementarySoundFormat(bytes, source) {
   return { channels: first.channels, sampleRate: first.sampleRate };
 }
 
+const WAVE_FORMAT_PCM = 0x0001;
+const WAVE_FORMAT_MPEGLAYER3 = 0x0055;
+
+/**
+ * Microsoft mmreg.h WAVE_FORMAT_PCM in the same FORMAT_WaveFormatEx block as the
+ * wrapped MP3 family: 40 original Mob/Pet nodes (for example Mob.img/2110300/Damage)
+ * carry mono 44,100 Hz 16-bit samples with cbSize 0. Field consistency is checked;
+ * samples are never transcoded.
+ */
+function pcmSoundFormat(node, source) {
+  const data = node.value.formatData;
+  const channels = data.readUInt16LE(2),
+    sampleRate = data.readUInt32LE(4),
+    bits = data.readUInt16LE(14),
+    blockAlign = data.readUInt16LE(12);
+  if (
+    data.length !== 18 ||
+    data.readUInt16LE(16) !== 0 ||
+    ![8, 16].includes(bits) ||
+    blockAlign !== (channels * bits) / 8 ||
+    data.readUInt32LE(8) !== sampleRate * blockAlign ||
+    node.data.length % blockAlign !== 0 ||
+    Math.abs(
+      (node.data.length / (sampleRate * blockAlign)) * 1000 -
+        node.value.field30,
+    ) > 1
+  ) {
+    throw new Error(`Inconsistent original PCM sound envelope: ${source}`);
+  }
+  return { channels, sampleRate, encoding: WAVE_FORMAT_PCM };
+}
+
 /** Accept only the measured native-stream or existing WAVEFORMATEX envelope. */
 function originalSoundFormat(node, source) {
   const envelope = node.value;
@@ -133,19 +165,51 @@ function originalSoundFormat(node, source) {
     envelope.formatType === "00000000000000000000000000000000" &&
     data.length === 0
   ) {
-    return elementarySoundFormat(node.data, source);
+    return {
+      ...elementarySoundFormat(node.data, source),
+      encoding: WAVE_FORMAT_MPEGLAYER3,
+    };
   }
+  return waveFormatEx(node, source);
+}
+
+/** FORMAT_WaveFormatEx block: wrapped MP3 or PCM; every other tag is unsupported. */
+function waveFormatEx(node, source) {
+  const envelope = node.value;
+  const data = envelope.formatData;
   if (
     envelope.subType !== "8beb36e44f52ce119f530020af0ba770" ||
     envelope.sampleSize !== 0 ||
     envelope.formatType !== "819f580556c3ce11bf0100aa0055595a" ||
     data.length < 18 ||
-    data.readUInt16LE(0) !== 0x55 ||
     data.length !== 18 + data.readUInt16LE(16)
   ) {
     throw new Error(`Unsupported original sound format: ${source}`);
   }
-  return { channels: data.readUInt16LE(2), sampleRate: data.readUInt32LE(4) };
+  const tag = data.readUInt16LE(0);
+  if (tag === WAVE_FORMAT_PCM) return pcmSoundFormat(node, source);
+  if (tag !== WAVE_FORMAT_MPEGLAYER3) {
+    throw new Error(`Unsupported original sound format: ${source}`);
+  }
+  return {
+    channels: data.readUInt16LE(2),
+    sampleRate: data.readUInt32LE(4),
+    encoding: WAVE_FORMAT_MPEGLAYER3,
+  };
+}
+
+/** RIFF/WAVE container around the original fmt block and untouched PCM samples. */
+function waveContainer(node) {
+  const fmt = node.value.formatData,
+    header = Buffer.alloc(20);
+  header.write("RIFF", 0, "latin1");
+  header.writeUInt32LE(4 + 8 + fmt.length + 8 + node.data.length, 4);
+  header.write("WAVEfmt ", 8, "latin1");
+  header.writeUInt32LE(fmt.length, 16);
+  const data = Buffer.alloc(8);
+  data.write("data", 0, "latin1");
+  data.writeUInt32LE(node.data.length, 4);
+  return Buffer.concat([header, fmt, data, node.data]);
 }
 
 /** Validate the original MPEG envelope, never transcode its payload. */
@@ -156,14 +220,14 @@ export function soundFormat(node, source) {
   const envelope = node.value;
   validateSoundEnvelope(envelope, source);
   const data = envelope.formatData;
-  const { channels, sampleRate } = originalSoundFormat(node, source);
+  const { channels, sampleRate, encoding } = originalSoundFormat(node, source);
   if (channels < 1 || channels > 2 || sampleRate < 8000 || sampleRate > 96000) {
     throw new Error(`Invalid original sound envelope: ${source}`);
   }
   return {
     channels,
     sampleRate,
-    encoding: 0x55,
+    encoding,
     durationMs: envelope.field30,
     envelope: { ...envelope, formatData: data.toString("hex") },
   };
@@ -175,8 +239,12 @@ export async function publishSound(context, node, source) {
 
 async function publishResolvedSound(context, node, source) {
   const format = soundFormat(node, source);
+  const payload =
+    format.encoding === WAVE_FORMAT_PCM
+      ? await resource(context.output, "audio", "wav", waveContainer(node))
+      : await resource(context.output, "audio", "mp3", node.data);
   return {
-    ...(await resource(context.output, "audio", "mp3", node.data)),
+    ...payload,
     source,
     ...format,
   };
@@ -432,6 +500,63 @@ async function retainedCombatSound(context, node, source) {
     available: true,
     descriptor: await publishResolvedSound(context, resolved, source),
   };
+}
+
+function mapMobIds(context, mapIds) {
+  const ids = new Set();
+  for (const mapId of mapIds) {
+    const map = context.image("Map", `Map/Map${mapId[0]}/${mapId}.img`);
+    for (const record of Object.values(map.children.life?.children ?? {})) {
+      if (value(record, "type", "") === "m") {
+        ids.add(String(value(record, "id", "")).padStart(7, "0"));
+      }
+    }
+  }
+  return ids;
+}
+
+function combatSoundSources(context, category, ids) {
+  const root = context.image("Sound", `${category}.img`),
+    rows = [];
+  for (const id of ids ?? Object.keys(root.children)) {
+    if (!root.children[id]) continue;
+    for (const [name, node] of Object.entries(
+      resolveNode(root.children[id]).children,
+    )) {
+      if (!COMBAT_SOUND_NAMES[category].test(name)) continue;
+      // Unresolved aliases are retained as unavailable records, not failures.
+      rows.push({
+        node,
+        source: `Sound.wz:${category}.img/${id}/${name}`,
+        optional: true,
+      });
+    }
+  }
+  return rows;
+}
+
+/** Every Sound.wz node extractAudiovisual publishes, so preflight validates the same set. */
+export function audiovisualSoundSources(context, mapIds) {
+  const rows = [];
+  for (const category of ["UI", "Game"]) {
+    for (const name of Object.keys(
+      context.image("Sound", `${category}.img`).children,
+    )) {
+      rows.push({
+        node: at(context.image("Sound", `${category}.img`), name),
+        source: `Sound.wz:${category}.img/${name}`,
+      });
+    }
+  }
+  rows.push(
+    ...combatSoundSources(context, "Mob", mapMobIds(context, mapIds)),
+    ...combatSoundSources(context, "Weapon", null),
+    {
+      node: at(context.image("Sound", "BgmUI.img"), "Title"),
+      source: "Sound.wz:BgmUI.img/Title",
+    },
+  );
+  return rows;
 }
 
 /** Immutable catalog metadata; audio and visual payloads remain separately demand-loaded. */

@@ -143,3 +143,57 @@ test("wrapped MP3 continues to derive its format from the original WAVEFORMATEX"
   formatData.writeUInt16LE(1, 16);
   await rejected(node);
 });
+
+// Mob.img/2110300/Damage envelope shape: WAVE_FORMAT_PCM, mono, 44,100 Hz, 16-bit.
+function pcm(samples, overrides = {}) {
+  const format = Buffer.from("0100010044ac000088580100020010000000", "hex");
+  const data = Buffer.alloc(samples * 2);
+  for (let index = 0; index < samples; index++) {
+    data.writeInt16LE(((index % 64) - 32) * 512, index * 2);
+  }
+  return sound(data, {
+    field30: Math.floor((samples / 44100) * 1000),
+    field34: 2,
+    subType: "8beb36e44f52ce119f530020af0ba770",
+    sampleSize: 0,
+    formatType: "819f580556c3ce11bf0100aa0055595a",
+    formatData: format,
+    ...overrides,
+  });
+}
+
+test("original PCM is packaged unchanged in a RIFF/WAVE container", async () => {
+  const output = await mkdtemp(join(tmpdir(), "maple-audio-pcm-"));
+  try {
+    await mkdir(join(output, "audio"));
+    const node = pcm(44100);
+    const descriptor = await publishSound({ output }, node, "synthetic PCM");
+    expect(descriptor).toMatchObject({
+      encoding: 1,
+      channels: 1,
+      sampleRate: 44100,
+      durationMs: 1000,
+    });
+    const wav = await readFile(
+      join(output, "audio", `${descriptor.sha256}.wav`),
+    );
+    expect(wav.toString("latin1", 0, 4)).toBe("RIFF");
+    expect(wav.subarray(20, 38).equals(node.value.formatData)).toBe(true);
+    expect(wav.subarray(46).equals(node.data)).toBe(true);
+  } finally {
+    await rm(output, { recursive: true, force: true });
+  }
+});
+
+test("inconsistent PCM fields and unknown format tags stay rejected", async () => {
+  const wrongRate = Buffer.from("0100010044ac000044ac0000020010000000", "hex");
+  const adpcm = Buffer.from("0200010044ac000088580100020010000000", "hex");
+  for (const formatData of [wrongRate, adpcm]) {
+    await expect(
+      publishSound({ output: tmpdir() }, pcm(44100, { formatData }), "bad"),
+    ).rejects.toThrow();
+  }
+  await expect(
+    publishSound({ output: tmpdir() }, pcm(44100, { field30: 900 }), "bad"),
+  ).rejects.toThrow("Inconsistent original PCM sound envelope");
+});

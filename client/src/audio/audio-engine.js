@@ -241,7 +241,8 @@ export class AudioEngine {
   }
   async decode(descriptor, signal, replacingBGM) {
     if (
-      descriptor.encoding !== 0x55 ||
+      // WAVE_FORMAT_MPEGLAYER3 MP3 or WAVE_FORMAT_PCM in a RIFF container.
+      ![0x55, 0x01].includes(descriptor.encoding) ||
       descriptor.bytes > 16 * 1024 * 1024 ||
       !Number.isFinite(descriptor.durationMs) ||
       descriptor.durationMs <= 0 ||

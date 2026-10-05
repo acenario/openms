@@ -6,6 +6,7 @@ import {
   avatarMaps,
   defaultAvatarInputs,
 } from "./avatar-data.js";
+import { audiovisualSoundSources } from "./audiovisual-data.js";
 import { originalFrames } from "./extraction-frames.js";
 import { selectedMapIds } from "./extraction-inputs.js";
 import { convertServerData } from "./server-data.js";
@@ -112,6 +113,25 @@ async function sharedWorld(state) {
   }
 }
 
+/** The audiovisual recipe's UI/Game, combat and login sounds; map BGMs are per-map checks. */
+function audiovisualSounds(state) {
+  state.context.setOwner("shared");
+  state.progress?.("Preflight: validating audiovisual sound families");
+  const rows = state.findings.check(null, "audiovisual-sounds", undefined, () =>
+    audiovisualSoundSources(state.context, state.report.selection.ids),
+  );
+  for (const row of rows ?? []) {
+    if (row.optional) {
+      try {
+        resolveNode(row.node);
+      } catch {
+        continue; // extraction publishes this alias as unavailable
+      }
+    }
+    state.validators.sound(row.node);
+  }
+}
+
 /** Join ownership after every traversal, including cached sources reused by later maps. */
 export function finalizePreflight(state) {
   const { context, report, templateOwners } = state;
@@ -163,6 +183,7 @@ export async function preflightAssets(options = {}) {
     selectWorld(state, seeds, options.maps !== undefined);
     await sharedWorld(state);
     await validateSelectedMaps(state);
+    audiovisualSounds(state);
     options.progress?.("Preflight: finalizing source ownership and findings");
     finalizePreflight(state);
   } catch (error) {
