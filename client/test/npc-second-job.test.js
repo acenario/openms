@@ -5,6 +5,7 @@ import { compileNpcScript } from "../tools/npc-script-compiler.js";
 import { NpcScriptSession } from "../src/npc/npc-script-runtime.js";
 import { createProfile } from "../src/profile/profile-validation.js";
 import { ProfileStore } from "./fixtures/memory-profile-store.js";
+import { grantItem, itemCount } from "../src/items/inventory-model.js";
 
 // Vendored Cosmic scripts, compiled exactly as conversion does.
 const ROOT = new URL("../../infra/gameplay-definitions/", import.meta.url);
@@ -76,6 +77,20 @@ function character({ level = 30, job = 100, mapId = "102000003" } = {}) {
   return { items, travels: [], store: ProfileStore.memory(profile, { items }) };
 }
 
+function give(owner, id, count) {
+  owner.items[id] ??= { id, descriptor: {}, info: { slotMax: 100 } };
+  grantItem(owner.store.profile, owner.items[id], count);
+}
+
+function respond(session, action, value) {
+  return session.respond({
+    sessionId: session.sessionId,
+    revision: session.view.revision,
+    action,
+    ...(value === undefined ? {} : { value }),
+  });
+}
+
 function talk(owner, npcId) {
   const artifact = compile(npcId);
   for (const id of artifact.dependencies.itemIds) {
@@ -105,6 +120,24 @@ test("a capped character still needs the unavailable Hall-of-Fame registry", asy
     const result = await talk(owner, 1022000).start();
     expect(result.ok).toBe(false);
     expect(result.reason).toContain("hall-of-fame-player-npc");
+  } finally {
+    await owner.store.destroy();
+  }
+});
+
+test("leaving Kyrin's test room removes every carried crystal of both kinds", async () => {
+  const owner = character({ job: 500, mapId: "108000502" });
+  give(owner, 4031856, 5);
+  give(owner, 4031857, 3);
+  try {
+    const session = talk(owner, 1072008);
+    expect((await session.start()).view.kind).toBe("choice");
+    expect((await respond(session, "choose", 1)).ok).toBe(true);
+    const profile = owner.store.profile;
+    expect(itemCount(profile, 4031856)).toBe(0);
+    expect(itemCount(profile, 4031857)).toBe(0);
+    expect(owner.travels).toEqual([{ mapId: 120000101, portal: 0 }]);
+    expect(profile.location.mapId).toBe("120000101");
   } finally {
     await owner.store.destroy();
   }

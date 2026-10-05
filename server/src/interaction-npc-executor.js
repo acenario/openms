@@ -15,6 +15,7 @@ import { ruleError } from "./action-rules.js";
 
 const CAPABILITIES = new Set([
   "item",
+  "remove-all",
   "job",
   "reset-stats",
   "warp",

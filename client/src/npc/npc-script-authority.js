@@ -717,6 +717,21 @@ function itemEffect(turn, node, args) {
   turn.effects.push({ kind: "item", itemId: id, delta: count, show });
 }
 
+/** SERVER AbstractPlayerInteraction.removeAll:872–887 removes every carried
+ *  instance. Its extra equipped-instance removal is not admitted here. */
+function removeAllEffect(turn, id) {
+  itemTemplate(turn, id);
+  requireNpc(
+    inventoryType(id) !== 1,
+    "NPC removeAll of equipment requires equipped-item authority",
+    "npc-dependency",
+  );
+  const count = itemCount(turn.profile, id);
+  if (count === 0) return;
+  consumeTemplate(turn.profile, id, count);
+  turn.effects.push({ kind: "item", itemId: id, delta: -count, show: true });
+}
+
 function questEffect(turn, node, args) {
   const id = npcDependency(turn.context, "questIds", args[0]);
   const npcId =
@@ -869,6 +884,7 @@ function resetStatsEffect(turn, enabled) {
 export function applyNpcEffect(turn, node, args) {
   turn.environment.recordEffect?.(node, args);
   if (node.kind === "item") itemEffect(turn, node, args);
+  else if (node.kind === "remove-all") removeAllEffect(turn, args[0]);
   else if (node.kind === "job") jobEffect(turn, args);
   else if (node.kind === "reset-stats") resetStatsEffect(turn, args[0]);
   else if (node.kind === "warp") warpEffect(turn, args);

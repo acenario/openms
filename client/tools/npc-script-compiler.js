@@ -44,6 +44,7 @@ const EFFECTS = Object.freeze({
   resetStats: { kind: "reset-stats", min: 0, max: 0 },
   warp: { kind: "warp", min: 1, max: 2, dependency: "mapIds" },
   gainItem: { kind: "item", min: 1, max: 3, dependency: "itemIds" },
+  removeAll: { kind: "remove-all", min: 1, max: 1, dependency: "itemIds" },
   forceStartQuest: {
     kind: "quest-start",
     min: 1,

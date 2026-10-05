@@ -398,7 +398,9 @@ function validateDialog(node, context) {
 
 function effectArity(kind) {
   if (kind === "portal-sound") return [0, 0];
-  if (["meso", "crafting-scroll", "save-location"].includes(kind)) {
+  if (
+    ["meso", "crafting-scroll", "save-location", "remove-all"].includes(kind)
+  ) {
     return [1, 1];
   }
   return [1, kind === "item" ? 3 : 2];
@@ -415,6 +417,7 @@ function validateEffect(node, context) {
       "job",
       "reset-stats",
       "item",
+      "remove-all",
       "warp",
       "quest-start",
       "quest-complete",

@@ -220,6 +220,10 @@ function effectDependencies(analysis, node) {
     ids(analysis, "mapIds", node.args[0]);
     return;
   }
+  if (node.kind === "remove-all") {
+    ids(analysis, "itemIds", node.args[0]);
+    return;
+  }
   const family = node.kind === "item" ? "itemIds" : "questIds";
   const values = ids(analysis, family, node.args[0]);
   if (node.kind !== "item") {
