@@ -168,12 +168,14 @@ export function itemView(item, revision, equipped = false, items) {
   if (inventoryType(item.id) === 1) {
     const upgrade = equipmentUpgrade(item, items[item.id]);
     equipment = {
-      upgradesRemaining: upgrade?.slots ?? 0,
-      upgradesUsed: upgrade?.level ?? 0,
+      // Catalogs built before numeric info Strings were read as integers can still hold "1"; the
+      // protocol rejects a string stat, which would lock the owner out of every join.
+      upgradesRemaining: Number(upgrade?.slots ?? 0),
+      upgradesUsed: Number(upgrade?.level ?? 0),
       stats: STATS.flatMap((key, index) =>
         upgrade?.stats?.[UPGRADE_STATS[index]] === undefined
           ? []
-          : [{ key, value: upgrade.stats[UPGRADE_STATS[index]] }],
+          : [{ key, value: Number(upgrade.stats[UPGRADE_STATS[index]]) }],
       ),
     };
   }
