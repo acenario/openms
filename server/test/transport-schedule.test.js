@@ -165,6 +165,13 @@ test("travelRate scales the cycle like getTransportationTime; rate 1 is v83", ()
   });
 });
 
+const BASE_ITEMS = {
+  1040002: { id: 1040002, descriptor: {}, info: { islot: "Ma" } },
+  1060002: { id: 1060002, descriptor: {}, info: { islot: "Pn" } },
+  1072001: { id: 1072001, descriptor: {}, info: { islot: "So" } },
+  1302000: { id: 1302000, descriptor: {}, info: { islot: "Wp" } },
+};
+
 function boardingSession(entry) {
   const compilation = compileNpcScript({
     ...source("npc/1032008.js"),
@@ -174,10 +181,7 @@ function boardingSession(entry) {
   });
   expect(compilation.blockers).toEqual([]);
   const items = {
-    1040002: { id: 1040002, descriptor: {}, info: { islot: "Ma" } },
-    1060002: { id: 1060002, descriptor: {}, info: { islot: "Pn" } },
-    1072001: { id: 1072001, descriptor: {}, info: { islot: "So" } },
-    1302000: { id: 1302000, descriptor: {}, info: { islot: "Wp" } },
+    ...BASE_ITEMS,
     4031045: { id: 4031045, descriptor: {}, info: { slotMax: 100 } },
   };
   const profile = createProfile({ mapId: "101000300", x: 0, y: 0, facing: 1 });
@@ -421,5 +425,91 @@ test("a ride whose invasion roll fails spawns nothing", async () => {
     world.now = at;
     advanceTransports(world);
     expect([...ellinia.mobs, ...orbis.mobs]).toEqual([]);
+  }
+});
+
+function compileSource(text) {
+  return compileNpcScript({
+    text,
+    path: "scripts/npc/test.js",
+    sha256: createHash("sha256").update(text).digest("hex"),
+    staticConfig: POLICY.staticConfig,
+    originalQuestIds: new Set(),
+  });
+}
+
+test("a selection-indexed warp closes over its offered choices and fails closed otherwise", () => {
+  const menu = (warp) =>
+    `function start() { cm.sendSimple("#L0#a#l\\r\\n#L1#b#l"); }\n` +
+    `function action(mode, type, selection) { ${warp} cm.dispose(); }`;
+  // -1 is the selection every non-choice response carries.
+  expect(
+    compileSource(menu("cm.warp(100000000 + selection * 100);")).dependencies
+      .mapIds,
+  ).toEqual([99999900, 100000000, 100000100]);
+  for (const warp of [
+    "var n = selection; n++; cm.warp(100000000 + n);",
+    "cm.warp(100000000 + cm.getMeso());",
+  ]) {
+    expect(
+      compileSource(menu(warp)).blockers.map((row) => row.reason),
+    ).toContain("mapIds must have a complete finite literal dependency set");
+  }
+});
+
+test("Isa sends an Orbis arrival to the chosen platform", async () => {
+  const compilation = compileNpcScript({
+    ...source("npc/2012006.js"),
+    staticConfig: POLICY.staticConfig,
+    originalQuestIds: new Set(),
+  });
+  expect(compilation.blockers).toEqual([]);
+  // Platforms 200000110..200000160 are Map.wz Orbis station platforms.
+  expect(compilation.dependencies.mapIds).toEqual([
+    200000100, 200000110, 200000120, 200000130, 200000140, 200000150, 200000160,
+  ]);
+  const profile = createProfile({ mapId: "200000100", x: 0, y: 0, facing: 1 });
+  const store = ProfileStore.memory(profile, { items: BASE_ITEMS });
+  const travels = [];
+  const environment = {
+    npcId: 2012006,
+    items: BASE_ITEMS,
+    quests: { schemaVersion: 1, records: {} },
+    names: { npc: { 2012006: "Isa" }, item: {}, mob: {} },
+    mapNames: Object.fromEntries(
+      compilation.dependencies.mapIds.map((id) => [id, `Map ${id}`]),
+    ),
+    portraits: { 2012006: {} },
+    shops: {},
+    artwork: new Set(),
+    artworkMetadata: {},
+    isCurrent: () => true,
+    isBusy: () => false,
+    prepareTravel: async (destination) => {
+      travels.push(destination);
+      return {
+        isCurrent: () => true,
+        apply: (draft) => {
+          draft.location.mapId = String(destination.mapId).padStart(9, "0");
+        },
+        publish: () => {},
+        release: () => {},
+      };
+    },
+  };
+  const session = new NpcScriptSession(compilation, store, environment);
+  try {
+    const menu = (await session.start()).view;
+    expect(menu.choices.map((choice) => choice.id)).toEqual([0, 1, 2, 3, 4, 5]);
+    await session.respond({
+      sessionId: session.sessionId,
+      revision: session.view.revision,
+      action: "choose",
+      value: 0,
+    });
+    expect((await respond(session, "next")).ok).toBe(true);
+    expect(travels).toEqual([{ mapId: 200000110, portal: "west00" }]);
+  } finally {
+    await store.destroy();
   }
 });

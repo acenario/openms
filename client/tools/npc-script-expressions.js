@@ -20,6 +20,7 @@ import {
   npcMarkupId,
 } from "../src/npc/npc-script-markup.js";
 import { SAVED_LOCATION_TYPES } from "../src/profile/profile-domains.js";
+import { npcNumericDomain } from "../src/npc/npc-script-domains.js";
 
 const BINARY = new Set([
   "+",
@@ -626,6 +627,14 @@ export function collectExpressionDependencies(context) {
   }
 }
 
+/** Selection-indexed arithmetic warps close over their finite domain. */
+function arithmeticMapIds(context, request, expression) {
+  const domain = npcNumericDomain(context.program, expression);
+  if (!domain) return false;
+  for (const id of domain) recordDependency(context, request, id);
+  return true;
+}
+
 function recordDependencyLeaf(context, request, state, record) {
   if (
     request.kind === "mapIds" &&
@@ -634,6 +643,9 @@ function recordDependencyLeaf(context, request, state, record) {
     state.path.length === 0
   ) {
     return true;
+  }
+  if (request.kind === "mapIds" && dependencyLeaf(record, state, "binary")) {
+    return arithmeticMapIds(context, request, state.expression);
   }
   if (!dependencyLeaf(record, state, "literal")) return false;
   recordDependency(context, request, record.value);

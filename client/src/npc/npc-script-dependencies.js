@@ -5,6 +5,7 @@ import {
   requireNpc,
 } from "./npc-script-values.js";
 import { SAVED_LOCATION_TYPES } from "../profile/profile-domains.js";
+import { npcNumericDomain } from "./npc-script-domains.js";
 
 function assignments(program) {
   const values = new Map(),
@@ -157,6 +158,17 @@ function finiteValues(analysis, expression, arrays = false, family = null) {
   return result;
 }
 
+/** Selection-indexed arithmetic warps close over their finite domain. */
+function arithmeticMapIds(analysis, expression, result) {
+  const domain = npcNumericDomain(analysis.context.program, expression);
+  requireNpc(
+    domain !== null,
+    "NPC dependency is not a complete finite literal set",
+    "npc-dependency",
+  );
+  for (const id of domain) result.add(id);
+}
+
 function collectFiniteValue(analysis, item, result) {
   const { state, node, arrays, family } = item;
   if (state.path.length !== 0) {
@@ -169,6 +181,10 @@ function collectFiniteValue(analysis, item, result) {
     ["saved-location-peek", "saved-location-take"].includes(node.kind)
   ) {
     result.add("saved-location");
+    return;
+  }
+  if (family === "mapIds" && node.op === "binary") {
+    arithmeticMapIds(analysis, state.expression, result);
     return;
   }
   if (arrays && node.op === "literal") return;

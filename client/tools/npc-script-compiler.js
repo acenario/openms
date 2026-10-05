@@ -734,6 +734,11 @@ function compiledProgram(context, root) {
         .map((variable) => variable.key),
     };
   }
+  context.program = {
+    expressions: context.expressions,
+    statements: context.statements,
+    functions,
+  };
   collectConcatenationDependencies(context);
   collectExpressionDependencies(context);
   collectLoopBounds(context);
