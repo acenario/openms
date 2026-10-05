@@ -262,6 +262,12 @@ export class Participants {
         },
       );
       if (receipt.status === "committed") {
+        if (receipt.applied && context.produced) {
+          // Commands waiting for their slot rebase over exactly these increments.
+          for (const owner of context.owners) {
+            owner.producedCommits = (owner.producedCommits ?? 0) + 1;
+          }
+        }
         if (receipt.applied) await this.installProfiles(context, prepared);
         const ids = context.account
           ? [...this.world.actors.values()]

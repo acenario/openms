@@ -288,8 +288,32 @@ export async function executeAction(actor, message, world) {
   }
 }
 
+/** Revision before any wait; null when the client did not observe the current state. */
+function commandArrival(actor, message, world) {
+  const revision = currentInteractionRevision(actor, message.action, world);
+  if (message.expectedRevision !== revision) return null;
+  return { revision, produced: actor.producedCommits ?? 0 };
+}
+
+/** Server-produced commits (incoming hits, kill rewards) can land while a command waits
+ * for its slot after arrival. The client could not have observed them, so rebase over
+ * exactly those increments; any other intervening commit still refuses it as stale.
+ * Runs with the actor reserved, so no further commit can interleave before admission. */
+function rebaseProducedCommits(actor, operation, arrival) {
+  if (!arrival || !["character", "inventory"].includes(operation.domain)) {
+    return;
+  }
+  const current =
+    operation.domain === "inventory" ? actor.inventoryRevision : actor.revision;
+  const produced = (actor.producedCommits ?? 0) - arrival.produced;
+  if (current - arrival.revision === produced) {
+    operation.expectedRevision = current;
+  }
+}
+
 async function executeQueuedAction(actor, message, world) {
   const queuedAt = performance.now();
+  const arrival = commandArrival(actor, message, world);
   const entry = await queueAdmission(
     actor,
     () => prepareAction(actor, message, world, queuedAt),
@@ -299,6 +323,7 @@ async function executeQueuedAction(actor, message, world) {
     return world.participants.reconcile(actor, entry.receipt, entry.replayed);
   }
   const { operation, receipts, ephemeral } = entry;
+  rebaseProducedCommits(actor, operation, arrival);
   try {
     admitActor(actor, world, message.fieldEpoch);
     const receipt = await dispatch(actor, message, world, operation);
